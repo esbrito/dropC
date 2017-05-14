@@ -3,6 +3,9 @@
 #include <netinet/in.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 #define MAXNAME 50
 #define MAXFILES 10
