@@ -6,6 +6,7 @@
 
 //Thread responsável pela conexão. Uma pra cada cliente conectado
 void *connection_handler(void *);
+int currentSocket;
 
 int main(int argc, char *argv[])
 {
@@ -73,27 +74,48 @@ void create_user_folder(char *userid)
     }
 }
 
+void receive_file(char *file)
+{
+    char file_buffer[10000];
+    FILE *fp;
+    int n;
+
+    n = recv(currentSocket, file_buffer, sizeof(file_buffer), 0);
+    {
+        printf("\n\n Recebendo arquivo... \n\n");
+        file_buffer[n] = '\0';
+        fflush(stdout);
+        fp = fopen(file, "w");
+        fputs(file_buffer, fp);
+        fclose(fp);
+    }
+    printf("\n\n Arquivo recebido. Informando cliente... \n\n");
+    char upload_done[10];
+    strcpy(upload_done, "done");
+    send(currentSocket, upload_done, strlen(upload_done), 0); //Confirmação de que recebeu todo arquivo
+}
+
 /*
  * Controla a conexao para cada cliente. Uma thread para cada
  * */
 void *connection_handler(void *socket_desc)
 {
+    int number_of_files = 0;
     //Descritor do socket
-    struct client user, loggeduser;
     int sock = *(int *)socket_desc;
     int read_size;
-    char *message, command[10];
-    
-    
+    char *message, command[10], username[50];
+
     //Aguarda recebimento de mensagem do cliente. A primeira mensagem é pra definir quem ele é.
-    if ((read_size = recv(sock, &user, sizeof(user), 0)) < 0)
+    if ((read_size = recv(sock, username, sizeof(username), 0)) < 0)
     {
-        printf("Erro ao receber informações do usuario");
+        printf("Erro ao receber nome do usuario\n");
     }
+    username[read_size] = '\0';
     //TODO Verifica se já tem o máximo de usuarios logados com aquela conta
 
     //Cria pasta para usuário caso nao exista
-    create_user_folder(user.userid);
+    create_user_folder(username);
     printf("\n\n Pasta encontrada/criada com sucesso \n\n");
     //Aguarda comandos e os executa
     while ((read_size = recv(sock, command, sizeof(command), 0)) > 0)
@@ -102,26 +124,24 @@ void *connection_handler(void *socket_desc)
         printf("\n\n Comando recebido %s\n\n", command);
         if (strcmp(command, "download") == 0)
         {
-           
         }
-        else if(strcmp(command, "upload") == 0){
+        else if (strcmp(command, "upload") == 0)
+        {
+            //Faz a confirmação pro cliente do comando recebido
             printf("\n\n Comando Upload recebido \n\n");
             char upload_response[10];
             strcpy(upload_response, "upload");
             send(sock, upload_response, strlen(upload_response), 0); //Confirmação de que recebeu esse comando
-            
-            char file_buffer[10000];
-            FILE *fp;
-            int n;
-            n = recv(sock, file_buffer, sizeof(file_buffer), 0);
+            //Aguardo nome do arquivo
+            char file_name[50];
+            if ((read_size = recv(sock, file_name, sizeof(file_name), 0)) < 0)
             {
-                printf("\n\n Recebendo arquivo \n\n");
-                file_buffer[n] = '\0';
-                fflush(stdout);
-                fp = fopen("eduardo/arquivo_recebido.txt", "w");
-                fputs(file_buffer, fp);
-                fclose(fp);
+                printf("Erro ao receber nome do arquivo\n");
             }
+            file_name[read_size] = '\0';
+            send(sock, file_name, strlen(file_name), 0); // Envia confirmação de que recebeu o nome do arquivo
+            currentSocket = sock;
+            receive_file(file_name);
         }
         else
         {

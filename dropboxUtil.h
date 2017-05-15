@@ -10,17 +10,19 @@
 #define MAXNAME 50
 #define MAXFILES 10
 
-struct	file_info	{
+struct file_info
+{
     char name[MAXNAME];
     char extension[MAXNAME];
     char last_modified[MAXNAME];
     int size;
 };
 
-struct	client	{
+struct client
+{
     int devices[2];
     char userid[MAXNAME];
-    struct	file_info f_info[MAXFILES];
+    struct file_info f_info[MAXFILES];
     int logged_in;
 };
 
