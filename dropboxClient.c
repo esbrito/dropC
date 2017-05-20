@@ -50,18 +50,21 @@ int main(int argc, char *argv[])
         char *command = strdup(message);
         char *word = strsep(&command, " ");
         printf("\nComando digitado: %s\n", word);
+
         if (strcmp(word, "download") == 0)
         {
             word = strsep(&command, " ");
             //Obtem arquivo especificado
             get_file(word);
         }
+
         else if (strcmp(word, "upload") == 0)
         {
             char upload_command[10];
             char upload_response[10];
             strcpy(upload_command, "upload");
             send(sock, upload_command, strlen(upload_command), 0); //Envia apenas o comando
+
             //Aguarda confirmação de recebimento
             n = recv(sock, upload_response, sizeof(upload_response), 0);
             upload_response[n] = '\0';
@@ -77,6 +80,22 @@ int main(int argc, char *argv[])
                 printf("Falha ao receber confirmação de comando enviado\n");
             }
         }
+
+        else if (strcmp(word, "list") == 0) {
+            char list_command[10];
+            char list_response[10];
+            strcpy(list_command,"list");
+            send(sock, list_command, strlen(list_command),0); // Envia apenas o comando
+
+            //Aguarda confirmacao de recebimento
+            n = recv(sock, list_response, sizeof(list_response),0);
+            list_response[n] = '\n';
+            if (strcmp(list_response, "list") == 0) {
+                //Aguarda listagem de arquivos
+                
+            }
+        }
+
         else
         {
             printf("Comando invalido...\n");

@@ -18,11 +18,15 @@ struct file_info
     int size;
 };
 
-struct client
+typedef struct client
 {
     int devices[2];
     char userid[MAXNAME];
     struct file_info f_info[MAXFILES];
     int logged_in;
-};
+} client_t;
 
+typedef struct node {
+	struct client* cli;
+	struct node* next;
+} node_t;
