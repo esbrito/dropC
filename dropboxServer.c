@@ -116,15 +116,11 @@ void receive_file(char *file)
         file_buffer[n] = '\0';
         fflush(stdout);
         fp = fopen(file, "w");
-            printf("\n\ntoaqui\n\n");
         fputs(file_buffer, fp);
         fclose(fp);
-        printf("to ake");
     }
-    printf("\n\n Arquivo recebido. Informando cliente... \n\n");
-    char upload_done[10];
-    strcpy(upload_done, "done");
-    send(currentSocket, upload_done, strlen(upload_done), 0); //Confirmação de que recebeu todo arquivo
+    memset(file_buffer, 0, sizeof(file_buffer));
+    printf("\n\n Arquivo recebido \n\n");
 }
 
 /*
@@ -159,11 +155,6 @@ void *connection_handler(void *socket_desc)
         }
         else if (strcmp(command, "upload") == 0)
         {
-            //Faz a confirmação pro cliente do comando recebido
-            printf("\n\n Comando Upload recebido \n\n");
-            char upload_response[10];
-            strcpy(upload_response, "upload");
-            send(sock, upload_response, strlen(upload_response), 0); //Confirmação de que recebeu esse comando
             //Aguardo nome do arquivo
             char file_name[50];
             if ((read_size = recv(sock, file_name, sizeof(file_name), 0)) < 0)
@@ -171,23 +162,20 @@ void *connection_handler(void *socket_desc)
                 printf("Erro ao receber nome do arquivo\n");
             }
             file_name[read_size] = '\0';
-            send(sock, file_name, strlen(file_name), 0); // Envia confirmação de que recebeu o nome do arquivo
+            // TODO lock na variavel
             currentSocket = sock;
             receive_file(file_name);
         }
         else if (strcmp(command, "list") == 0) {
             printf("\n\n Comando List recebido \n\n");
-
-            char list_response[10];
-            send(sock, list_response, strlen(list_response), 0);
+            
 
             //Informa os arquivos salvos no servidor
 
         }
         else
         {
-            char *error = "Erro, comando inválido\0";
-            write(sock, error, 2000);
+            printf("Erro, comando %s desconhecido\n\n", command);
         }
     }
 
@@ -295,7 +283,7 @@ node_t* create_client_list(node_t* head) {
                                         file_name_i++;
                                     }
                                     cli->f_info[f_i].name[file_name_i] = '\0';
-                                    printf("")
+                                    printf("");
                                     file_name_i++;
 
                                     //preenche extensao do arquivo

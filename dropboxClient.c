@@ -61,39 +61,20 @@ int main(int argc, char *argv[])
         else if (strcmp(word, "upload") == 0)
         {
             char upload_command[10];
-            char upload_response[10];
             strcpy(upload_command, "upload");
             send(sock, upload_command, strlen(upload_command), 0); //Envia apenas o comando
-
-            //Aguarda confirmação de recebimento
-            n = recv(sock, upload_response, sizeof(upload_response), 0);
-            upload_response[n] = '\0';
-            if (strcmp(upload_response, "upload") == 0)
-            {
-                word = strsep(&command, " \n");
-                printf("Arquivo a ser enviado: ->%s<- \n", word);
-                //Envia arquivo especificado
-                send_file(word);
-            }
-            else
-            {
-                printf("Falha ao receber confirmação de comando enviado\n");
-            }
+            word = strsep(&command, " \n");
+            printf("Arquivo a ser enviado: ->%s<- \n", word);
+            //Envia arquivo especificado
+            send_file(word);
         }
 
-        else if (strcmp(word, "list") == 0) {
+        else if (strcmp(word, "list") == 0)
+        {
             char list_command[10];
             char list_response[10];
-            strcpy(list_command,"list");
-            send(sock, list_command, strlen(list_command),0); // Envia apenas o comando
-
-            //Aguarda confirmacao de recebimento
-            n = recv(sock, list_response, sizeof(list_response),0);
-            list_response[n] = '\n';
-            if (strcmp(list_response, "list") == 0) {
-                //Aguarda listagem de arquivos
-                
-            }
+            strcpy(list_command, "list");
+            send(sock, list_command, strlen(list_command), 0); // Envia apenas o comando
         }
 
         else
@@ -151,57 +132,37 @@ void get_file(char *file)
 
 void send_file(char *file)
 {
-    //Enviando nome do arquivo
-    int n = 0;
-    char file_name[50];
-    char file_name_response[50];
-    snprintf(file_name, sizeof(file_name), "%s/%s", user.userid, file);
-    send(sock, file_name, strlen(file_name), 0); //Envia o nome do arquivo já com o path da pasta do servidor para facilitar. Ex. eduardo/arquivo.txt
-    //Aguarda confirmação de recebimento do nome
-    n = recv(sock, file_name_response, sizeof(file_name_response), 0);
-    file_name_response[n] = '\0';
-    if (strcmp(file_name_response, file_name) == 0)
-    {
-        printf("Confirmado o nome do arquivo a ser enviado\n");
-        FILE *fp;
+    FILE *fp;
+    printf("Verificando se arquivo existe: ->%s<- \n", file);
 
-        printf("Verificando se arquivo existe: ->%s<- \n", file);
-        if ((fp = fopen(file, "r")) == NULL)
-        {
-            printf("Arquivo não encontrado\n");
-        }
-        else
-        {
-            char file_buffer[1000];
-            char f_buffer[1000];
-            printf("\nArquivo encontrado\n");
-            while (!feof(fp)) //até acabar o arquivo
-            {
-                printf("Lendo arquivo...\n");
-                fgets(f_buffer, 1000, fp); //extrai 1000 chars do arquivo
-                if (feof(fp))
-                    break;
-                strcat(file_buffer, f_buffer);
-            }
-            printf("Enviando arquivo para o servidor....\n");
-            fclose(fp);
-            send(sock, file_buffer, strlen(file_buffer), 0);
-            //Aguarda confirmação de recebimento do arquivo
-            char upload_done[10];
-            n = recv(sock, upload_done, sizeof(upload_done), 0);
-            upload_done[n] = '\0';
-            if (strcmp(upload_done, "done") == 0)
-            {
-                printf("Arquivo recebido com sucesso!\n");
-            }
-            else
-            {
-                printf("Falha na confirmação do recebimento do arquivo.\n");
-            }
-        }
+    if ((fp = fopen(file, "r")) == NULL)
+    {
+        printf("Arquivo não encontrado\n");
     }
     else
     {
-        printf("Erro ao enviar o nome do arquivo");
+        printf("\nArquivo encontrado\n");
+
+        int n = 0;
+        char file_name[50];
+        snprintf(file_name, sizeof(file_name), "%s/%s", user.userid, file);
+        send(sock, file_name, strlen(file_name), 0); //Envia o nome do arquivo já com o path da pasta do servidor para facilitar. Ex. eduardo/arquivo.txt
+        char file_buffer[1000];
+        char f_buffer[1000];
+        while (!feof(fp)) //até acabar o arquivo
+        {
+            printf("Lendo arquivo...\n");
+            fgets(f_buffer, 1000, fp); //extrai 1000 chars do arquivo
+            if (feof(fp))
+                break;
+            strcat(file_buffer, f_buffer);
+        }
+        strcat(file_buffer, f_buffer);
+        printf("Enviando arquivo para o servidor....\n");
+        fclose(fp);
+        send(sock, file_buffer, strlen(file_buffer), 0);
+        memset(file_buffer,0,sizeof(file_buffer));
+        memset(f_buffer,0,sizeof(f_buffer));
+        printf("Arquivo recebido com sucesso!\n");
     }
 }
