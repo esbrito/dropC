@@ -4,7 +4,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <string.h>
-void sync_server(); 
-void receive_file(char *file); 
+void sync_server();
+void receive_file(char *file, int socket); 
 void send_file(char *file);
-

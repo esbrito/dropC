@@ -15,14 +15,18 @@ int count(node_t *head);
 node_t* append(node_t* head, client_t* cli);
 node_t* create_client_list(node_t* head);
 
+
+
+//Terá que se protegido por mutex
+node_t* head;
+
 //Thread responsável pela conexão. Uma pra cada cliente conectado
-int currentSocket;
 
 int main(int argc, char *argv[])
 {
 
-    node_t* head = NULL;
-    head = create_client_list(head);
+  head = NULL;
+  head = create_client_list(head);
 
 /*
     char uid[] = "eae";
@@ -92,25 +96,25 @@ int main(int argc, char *argv[])
     return 0;
 }
 
-void create_user_folder(char *userid)
+void create_user_folder(char *user_folder)
 {
 
-    printf("\nVerificando existência da pasta %s\n", userid);
+    printf("\nVerificando existência da pasta %s\n", user_folder);
     struct stat st = {0};
-    if (stat(userid, &st) == -1)
+    if (stat(user_folder, &st) == -1)
     {
         printf("\nNão existe! Criando pasta...\n");
-        mkdir(userid, 0777);
+        mkdir(user_folder, 0777);
     }
 }
 
-void receive_file(char *file)
+void receive_file(char *file, int socket)
 {
     char file_buffer[10000];
     FILE *fp;
     int n;
 
-    n = recv(currentSocket, file_buffer, sizeof(file_buffer), 0);
+    n = recv(socket, file_buffer, sizeof(file_buffer), 0);
     {
         printf("\n\n Recebendo arquivo... \n\n");
         file_buffer[n] = '\0';
@@ -123,6 +127,68 @@ void receive_file(char *file)
     printf("\n\n Arquivo recebido \n\n");
 }
 
+
+void sync_clint_local_files(char *user_folder, int sock){
+  int read_size;
+  node_t *cursor = head;
+  //Aguardo nome do arquivo
+  char file_name[50];
+  if ((read_size = recv(sock, file_name, sizeof(file_name), 0)) < 0)
+  {
+      printf("Erro ao receber nome do arquivo\n");
+  }
+  file_name[read_size] = '\0';
+  printf("Pasta do usuário >>%s<<\n", user_folder);
+  while (cursor != NULL) {
+    printf("Nome do arquivo recebido %s\n", file_name);
+    printf("Nome do cliente atual >>%s<<\n", cursor->cli->userid);
+    if(strcmp(cursor->cli->userid,user_folder) == 0){
+      printf("Encontrou usuário %s!\n", user_folder);
+      //Encontrado o cliente varre os arquivos dele para verificar se existe dado arquivo
+      int file_i = 0;
+      int has_file = 0;
+      while(file_i < MAXFILES){
+        printf("Nome do arquivo do servidor %s\n", cursor->cli->f_info[file_i].name);
+        if(strcmp(cursor->cli->f_info[file_i].name, file_name) == 0){
+          printf("Arquivo já existente no servidor. Verificando versão mais atual...\n");
+          //TODO Utilizar campos de última modificação para atualizar o arquivo
+          has_file = 1;
+          //Avisa cliente arquivo existe e o que precisar ser feito
+          //IF SERVIDOR MAIS ATUAL TEM QUE FAZER O PDATE
+          char sync_local_command_reponse[10];
+          strcpy(sync_local_command_reponse,"update");
+          send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
+          //TODO
+          break;
+        }
+        file_i++;
+      }
+      if(has_file == 0){
+        //Avisa cliente que ele deve enviar arquivo
+        char sync_local_command_reponse[10];
+        strcpy(sync_local_command_reponse,"new_file");
+        send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
+        printf("Receberá novo arquivo! \n");
+        //Aguardo nome do arquivo
+        char file_name[50];
+        if ((read_size = recv(sock, file_name, sizeof(file_name), 0)) < 0)
+        {
+            printf("Erro ao receber nome do arquivo\n");
+        }
+        file_name[read_size] = '\0';
+        receive_file(file_name, sock);
+      }
+      break;
+    }else{
+      cursor = cursor->next;
+    }
+
+  }
+
+}
+
+
+
 /*
  * Controla a conexao para cada cliente. Uma thread para cada
  * */
@@ -132,24 +198,24 @@ void *connection_handler(void *socket_desc)
     //Descritor do socket
     int sock = *(int *)socket_desc;
     int read_size;
-    char *message, command[10], username[50];
+    char *message, command[10], user_folder[50];
 
     //Aguarda recebimento de mensagem do cliente. A primeira mensagem é pra definir quem ele é.
-    if ((read_size = recv(sock, username, sizeof(username), 0)) < 0)
+    if ((read_size = recv(sock, user_folder, sizeof(user_folder), 0)) < 0)
     {
         printf("Erro ao receber nome do usuario\n");
     }
-    username[read_size] = '\0';
+    user_folder[read_size] = '\0';
     //TODO Verifica se já tem o máximo de usuarios logados com aquela conta
 
     //Cria pasta para usuário caso nao exista
-    create_user_folder(username);
+    create_user_folder(user_folder);
     printf("\n\n Pasta encontrada/criada com sucesso \n\n");
     //Aguarda comandos e os executa
     while ((read_size = recv(sock, command, sizeof(command), 0)) > 0)
     {
         command[read_size] = '\0';
-        printf("\n\n Comando recebido %s\n\n", command);
+        printf("\n\n Comando recebido >>%s<<\n\n", command);
         if (strcmp(command, "download") == 0)
         {
         }
@@ -162,13 +228,16 @@ void *connection_handler(void *socket_desc)
                 printf("Erro ao receber nome do arquivo\n");
             }
             file_name[read_size] = '\0';
-            // TODO lock na variavel
-            currentSocket = sock;
-            receive_file(file_name);
+            receive_file(file_name, sock);
+        }
+        else if (strcmp(command, "sync_local") == 0)
+        {
+          printf("Iniciando sincronização...\n");
+          sync_clint_local_files(user_folder, sock);
         }
         else if (strcmp(command, "list") == 0) {
             printf("\n\n Comando List recebido \n\n");
-            
+
 
             //Informa os arquivos salvos no servidor
 
@@ -310,7 +379,7 @@ node_t* create_client_list(node_t* head) {
                                     f_i++;
                                 }
                             }
-                            
+
                         }
                         closedir(user_d);
 

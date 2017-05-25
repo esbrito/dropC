@@ -3,6 +3,9 @@
 
 int sock;
 struct client user;
+char client_folder[1024];
+char username[50];
+
 
 int main(int argc, char *argv[])
 {
@@ -23,11 +26,8 @@ int main(int argc, char *argv[])
     {
         perror("Erro ao conectar com o servidor");
     }
-    user.logged_in = 1;
     //Envia que usuario que logou
-    char username[50];
     strcpy(username, userId);
-    strcpy(user.userid, userId);
     if (send(sock, username, sizeof(username), 0) < 0)
     {
         puts("Falha no envio da informação do usuario");
@@ -66,13 +66,27 @@ int main(int argc, char *argv[])
             word = strsep(&command, " \n");
             printf("Arquivo a ser enviado: ->%s<- \n", word);
             //Envia arquivo especificado
-            send_file(word);
+            FILE *fp;
+            printf("Verificando se arquivo existe: ->%s<- \n", word);
+
+            if ((fp = fopen(word, "r")) == NULL)
+            {
+                printf("Arquivo não encontrado\n");
+            }
+            else
+            {
+                printf("\nArquivo encontrado\n");
+
+                int n = 0;
+                char file_name[50];
+                snprintf(file_name, sizeof(file_name), "%s/%s", username, word);
+                send_file(file_name, fp);
+            }
         }
 
         else if (strcmp(word, "list") == 0)
         {
             char list_command[10];
-            char list_response[10];
             strcpy(list_command, "list");
             send(sock, list_command, strlen(list_command), 0); // Envia apenas o comando
         }
@@ -107,46 +121,120 @@ int connect_server(char *host, int port)
     }
 }
 
+void read_local_files(){
+
+  DIR *user_d;
+  struct dirent  *user_f;
+  int read_size;
+  // Abre pasta do cliente
+  user_d = opendir(client_folder);
+  if (user_d) {
+      while ((user_f = readdir(user_d)) != NULL) {
+          //Estrutura do arquivo sendo lido
+          struct file_info current_local_file;
+          if (user_f->d_name[0] != '.') {
+              // separa nome e extensao de arquivo
+              int file_name_i = 0;
+              // preenche nome do arquivo
+              while (user_f->d_name[file_name_i] != '.') {
+                  current_local_file.name[file_name_i] = user_f->d_name[file_name_i];
+                  file_name_i++;
+              }
+              current_local_file.name[file_name_i] = '\0';
+              printf("Verificando arquivo %s\n", current_local_file.name);
+              file_name_i++;
+
+              //preenche extensao do arquivo
+              int file_extension_i = 0;
+              while (user_f->d_name[file_name_i] != '\0') {
+                  current_local_file.extension[file_extension_i] = user_f->d_name[file_name_i];
+                  file_extension_i++;
+                  file_name_i++;
+              }
+              current_local_file.extension[file_extension_i] = '\0';
+              // TODO strcpy(current_local_file.last_modified, ctime(&attr.st_mtime));
+              //Envia comando para sincronizar este arquivo
+              char sync_local_command[10];
+              strcpy(sync_local_command, "sync_local");
+              send(sock, sync_local_command, strlen(sync_local_command), 0); //Envia apenas o comando
+              //Enviar agora o nome do arquivo para ver se ele existe
+              send(sock, current_local_file.name, strlen(current_local_file.name), 0);
+
+              //Aguardo resposta do servidor do que fazer
+              char response[10];
+              if ((read_size = recv(sock, response, sizeof(response), 0)) < 0)
+              {
+                  printf("Erro ao receber resposta\n");
+              }
+              response[read_size] = '\0';
+              printf("Resposta do servidor %s\n", response);
+              if (strcmp(response, "new_file") == 0)
+              {
+               printf("Arquivo não presente no servidor! \n");
+               //Envia arquivo especificado
+               char file_name_with_extension[50];
+               snprintf(file_name_with_extension, sizeof(file_name_with_extension), "sync_dir_%s/%s.%s", username, current_local_file.name, current_local_file.extension);
+               printf("Arquivo a ser enviado: ->%s<- \n", file_name_with_extension);
+               FILE *fp;
+               printf("Verificando se arquivo existe: ->%s<- \n", file_name_with_extension);
+               if ((fp = fopen(file_name_with_extension, "r")) == NULL)
+               {
+                   printf("Arquivo não encontrado\n");
+               }
+               else
+               {
+                   printf("\nArquivo encontrado\n");
+
+                   int n = 0;
+                   char file_name[50];
+                   snprintf(file_name, sizeof(file_name), "%s/%s.%s", username, current_local_file.name, current_local_file.extension);
+                   send_file(file_name, fp);
+               }
+
+             }
+             if (strcmp(response, "update") == 0)
+            {
+              printf("\nArquivo do servidor mais novo. Necessita atualizar...\n");
+              //TODO
+            }
+
+
+          }
+      }
+
+  }
+  closedir(user_d);
+}
+
+
 void sync_client()
 {
     printf("\nSync...\n");
-    char buffer[1024];
-    snprintf(buffer, sizeof(buffer), "sync_dir_%s", user.userid);
-    printf("Verificando cliente %s\n", user.userid);
-    printf("Verificando existência da pasta %s\n", buffer);
+    snprintf(client_folder, sizeof(client_folder), "sync_dir_%s", username);
+    printf("Verificando cliente %s\n", username);
+    printf("Verificando existência da pasta %s\n", client_folder);
     struct stat st = {0};
-    if (stat(buffer, &st) == -1)
+    if (stat(client_folder, &st) == -1)
     {
         printf("Não existe! Criando pasta...\n");
-        if (mkdir(buffer, 0777) < 0)
+        if (mkdir(client_folder, 0777) < 0)
         {
             perror("Erro ao criar pasta...\n");
         }
     }
-    //TODO realizar verificação dos arquivos e sinconizar de verdade
+    printf("\nInicializando sincronização...\n");
+    printf("\nVarrendo arquivos locais...\n");
+    read_local_files();
 }
 
 void get_file(char *file)
 {
 }
 
-void send_file(char *file)
+void send_file(char *file, FILE *fp)
 {
-    FILE *fp;
-    printf("Verificando se arquivo existe: ->%s<- \n", file);
 
-    if ((fp = fopen(file, "r")) == NULL)
-    {
-        printf("Arquivo não encontrado\n");
-    }
-    else
-    {
-        printf("\nArquivo encontrado\n");
-
-        int n = 0;
-        char file_name[50];
-        snprintf(file_name, sizeof(file_name), "%s/%s", user.userid, file);
-        send(sock, file_name, strlen(file_name), 0); //Envia o nome do arquivo já com o path da pasta do servidor para facilitar. Ex. eduardo/arquivo.txt
+        send(sock, file, strlen(file), 0); //Envia o nome do arquivo já com o path da pasta do servidor para facilitar. Ex. eduardo/arquivo.txt
         char file_buffer[1000];
         char f_buffer[1000];
         while (!feof(fp)) //até acabar o arquivo
@@ -164,5 +252,5 @@ void send_file(char *file)
         memset(file_buffer,0,sizeof(file_buffer));
         memset(f_buffer,0,sizeof(f_buffer));
         printf("Arquivo recebido com sucesso!\n");
-    }
+
 }
