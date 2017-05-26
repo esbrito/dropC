@@ -16,7 +16,7 @@ struct file_info
 {
     char name[MAXNAME];
     char extension[MAXNAME];
-    char last_modified[MAXNAME];
+    int last_modified;
     int size;
 };
 

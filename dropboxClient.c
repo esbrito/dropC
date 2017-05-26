@@ -1,5 +1,11 @@
 #include "dropboxUtil.h"
 #include "dropboxClient.h"
+#include <dirent.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 int sock;
 struct client user;
@@ -130,9 +136,9 @@ void read_local_files(){
   user_d = opendir(client_folder);
   if (user_d) {
       while ((user_f = readdir(user_d)) != NULL) {
-          //Estrutura do arquivo sendo lido
-          struct file_info current_local_file;
-          if (user_f->d_name[0] != '.') {
+            //Estrutura do arquivo sendo lido
+            struct file_info current_local_file;
+            if (user_f->d_name[0] != '.') {
               // separa nome e extensao de arquivo
               int file_name_i = 0;
               // preenche nome do arquivo
@@ -152,20 +158,46 @@ void read_local_files(){
                   file_name_i++;
               }
               current_local_file.extension[file_extension_i] = '\0';
-              // TODO strcpy(current_local_file.last_modified, ctime(&attr.st_mtime));
               //Envia comando para sincronizar este arquivo
               char sync_local_command[10];
               strcpy(sync_local_command, "sync_local");
               send(sock, sync_local_command, strlen(sync_local_command), 0); //Envia apenas o comando
-              //Enviar agora o nome do arquivo para ver se ele existe
-              send(sock, current_local_file.name, strlen(current_local_file.name), 0);
+              
+                //Envia o nome do arquivo e o last modified para ver se ele existe e se sim, qual eh mais recente
+                struct stat attr;
+                // gera a string do path do arquivo
+                char path[MAXNAME*2];
+                strcpy(path,client_folder);
+                path[strlen(client_folder)] = '/';
+                strcpy(path+strlen(client_folder)+1, current_local_file.name);
+                strcpy(path+strlen(client_folder)+1+strlen(current_local_file.name)+1, ".");
+                strcpy(path+strlen(client_folder)+1+strlen(current_local_file.name)+1+1, current_local_file.extension);
+                //printf("\n\n\npath: %s\n\n\n", path);
+
+                stat(path, &attr);
+                current_local_file.last_modified = ctime(&attr.st_mtime);
+                printf("\n\n\nLMINT: %i\n\n\n",current_local_file.last_modified);
+                printf("\n\n\nLMSTRING: %s\n\n\n",current_local_file.last_modified);
+
+                send(sock, current_local_file.name, strlen(current_local_file.name)+1, 0);
+                
+              char response[20];
+                if ((read_size = recv(sock, response, sizeof(response), 0)) < 0) {
+                    printf("Erro ao receber resposta\n");
+                }
+                if (strcmp(response, "ack") != 0) {
+                    printf("Erro ao receber resposta\n");
+                }
+                // envia o last modified para o servidor
+                int lm = htonl(current_local_file.last_modified);
+                send(sock, &lm, sizeof(lm), 0);
 
               //Aguardo resposta do servidor do que fazer
-              char response[10];
               if ((read_size = recv(sock, response, sizeof(response), 0)) < 0)
               {
                   printf("Erro ao receber resposta\n");
               }
+
               response[read_size] = '\0';
               printf("Resposta do servidor %s\n", response);
               if (strcmp(response, "new_file") == 0)
@@ -199,8 +231,8 @@ void read_local_files(){
             }
 
 
-          }
-      }
+            }
+        }
 
   }
   closedir(user_d);
