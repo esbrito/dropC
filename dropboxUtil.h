@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <time.h>
 
 
 #define MAXNAME 50
@@ -16,7 +17,7 @@ struct file_info
 {
     char name[MAXNAME];
     char extension[MAXNAME];
-    int last_modified;
+    time_t last_modified;
     int size;
 };
 

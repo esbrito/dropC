@@ -66,7 +66,7 @@ int main(int argc, char *argv[])
 
         else if (strcmp(word, "upload") == 0)
         {
-            char upload_command[10];
+            char upload_command[20];
             strcpy(upload_command, "upload");
             send(sock, upload_command, strlen(upload_command), 0); //Envia apenas o comando
             word = strsep(&command, " \n");
@@ -92,7 +92,7 @@ int main(int argc, char *argv[])
 
         else if (strcmp(word, "list") == 0)
         {
-            char list_command[10];
+            char list_command[20];
             strcpy(list_command, "list");
             send(sock, list_command, strlen(list_command), 0); // Envia apenas o comando
         }
@@ -130,7 +130,7 @@ int connect_server(char *host, int port)
 void read_local_files(){
 
   DIR *user_d;
-  struct dirent  *user_f;
+  struct dirent *user_f;
   int read_size;
   // Abre pasta do cliente
   user_d = opendir(client_folder);
@@ -147,9 +147,8 @@ void read_local_files(){
                   file_name_i++;
               }
               current_local_file.name[file_name_i] = '\0';
-              printf("Verificando arquivo %s\n", current_local_file.name);
+              printf("Verificando arquivo: %s\n", current_local_file.name);
               file_name_i++;
-
               //preenche extensao do arquivo
               int file_extension_i = 0;
               while (user_f->d_name[file_name_i] != '\0') {
@@ -159,9 +158,10 @@ void read_local_files(){
               }
               current_local_file.extension[file_extension_i] = '\0';
               //Envia comando para sincronizar este arquivo
-              char sync_local_command[10];
+              char sync_local_command[20];
               strcpy(sync_local_command, "sync_local");
               send(sock, sync_local_command, strlen(sync_local_command), 0); //Envia apenas o comando
+              printf("\n\nolha euiu\n\n");
               
                 //Envia o nome do arquivo e o last modified para ver se ele existe e se sim, qual eh mais recente
                 struct stat attr;
@@ -173,13 +173,13 @@ void read_local_files(){
                 strcpy(path+strlen(client_folder)+1+strlen(current_local_file.name)+1, ".");
                 strcpy(path+strlen(client_folder)+1+strlen(current_local_file.name)+1+1, current_local_file.extension);
                 //printf("\n\n\npath: %s\n\n\n", path);
+                send(sock, current_local_file.name, strlen(current_local_file.name)+1, 0);
 
                 stat(path, &attr);
-                current_local_file.last_modified = ctime(&attr.st_mtime);
-                printf("\n\n\nLMINT: %i\n\n\n",current_local_file.last_modified);
-                printf("\n\n\nLMSTRING: %s\n\n\n",current_local_file.last_modified);
+                current_local_file.last_modified = attr.st_mtime;
+                //printf("\n\n\nLMINT: %i\n\n\n",current_local_file.last_modified);
+                //printf("\n\n\nLMSTRING: %s\n\n\n",current_local_file.last_modified);
 
-                send(sock, current_local_file.name, strlen(current_local_file.name)+1, 0);
                 
               char response[20];
                 if ((read_size = recv(sock, response, sizeof(response), 0)) < 0) {
@@ -199,10 +199,10 @@ void read_local_files(){
               }
 
               response[read_size] = '\0';
-              printf("Resposta do servidor %s\n", response);
+              printf("Resposta do servidor: %s\n", response);
               if (strcmp(response, "new_file") == 0)
               {
-               printf("Arquivo não presente no servidor! \n");
+               printf("Arquivo não encontrado no servidor, sera enviado agora \n");
                //Envia arquivo especificado
                char file_name_with_extension[50];
                snprintf(file_name_with_extension, sizeof(file_name_with_extension), "sync_dir_%s/%s.%s", username, current_local_file.name, current_local_file.extension);
@@ -215,19 +215,25 @@ void read_local_files(){
                }
                else
                {
-                   printf("\nArquivo encontrado\n");
+                   printf("Arquivo encontrado\n");
 
                    int n = 0;
-                   char file_name[50];
+                   char file_name[MAXNAME];
                    snprintf(file_name, sizeof(file_name), "%s/%s.%s", username, current_local_file.name, current_local_file.extension);
                    send_file(file_name, fp);
+
                }
 
              }
-             if (strcmp(response, "update") == 0)
+             if (strcmp(response, "updatelocal") == 0)
             {
-              printf("\nArquivo do servidor mais novo. Necessita atualizar...\n");
+              printf("\nArquivo do servidor mais novo. Necessita atualizar a pasta do usuario\n");
               //TODO
+            }
+            else if (strcmp(response, "updateserver") == 0)
+            {
+              printf("\nArquivo do usuario mais novo. Necessita atualizar o servidor\n");
+              
             }
 
 
@@ -283,6 +289,14 @@ void send_file(char *file, FILE *fp)
         send(sock, file_buffer, strlen(file_buffer), 0);
         memset(file_buffer,0,sizeof(file_buffer));
         memset(f_buffer,0,sizeof(f_buffer));
-        printf("Arquivo recebido com sucesso!\n");
+
+        char response[20];
+        int read_size;
+        if ((read_size = recv(sock, response, sizeof(response), 0)) < 0) {
+            printf("Erro ao receber resposta\n");
+        }
+        if (strcmp(response, "done")) {
+            printf("Arquivo recebido com sucesso!\n");
+        }
 
 }
