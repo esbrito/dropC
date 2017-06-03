@@ -11,26 +11,24 @@
 //declaracoes das funcoes
 void *connection_handler(void *);
 
-node_t* create(client_t* cli, node_t* next);
-node_t* prepend(node_t* head, client_t* cli);
+node_t *create(client_t *cli, node_t *next);
+node_t *prepend(node_t *head, client_t *cli);
 int count(node_t *head);
-node_t* append(node_t* head, client_t* cli);
-node_t* create_client_list(node_t* head);
-
-
+node_t *append(node_t *head, client_t *cli);
+node_t *create_client_list(node_t *head);
 
 //Terá que se protegido por mutex
-node_t* head;
+node_t *head;
 
 //Thread responsável pela conexão. Uma pra cada cliente conectado
 
 int main(int argc, char *argv[])
 {
 
-  head = NULL;
-  head = create_client_list(head);
+    head = NULL;
+    head = create_client_list(head);
 
-/*
+    /*
     char uid[] = "eae";
     struct file_info f;
     int li = 1;
@@ -110,6 +108,39 @@ void create_user_folder(char *user_folder)
     }
 }
 
+void send_file(char *file, FILE *fp, int sock)
+{
+
+    send(sock, file, strlen(file), 0);
+    char file_buffer[1000];
+    char f_buffer[1000];
+    while (!feof(fp)) //até acabar o arquivo
+    {
+        printf("Lendo arquivo...\n");
+        fgets(f_buffer, 1000, fp); //extrai 1000 chars do arquivo
+        if (feof(fp))
+            break;
+        strcat(file_buffer, f_buffer);
+    }
+    strcat(file_buffer, f_buffer);
+    printf("Enviando arquivo para o cliente....\n");
+    fclose(fp);
+    send(sock, file_buffer, strlen(file_buffer), 0);
+    memset(file_buffer, 0, sizeof(file_buffer));
+    memset(f_buffer, 0, sizeof(f_buffer));
+
+    char response[20];
+    int read_size;
+    if ((read_size = recv(sock, response, sizeof(response), 0)) < 0)
+    {
+        printf("Erro ao receber resposta\n");
+    }
+    if (strcmp(response, "done"))
+    {
+        printf("Arquivo enviado com sucesso!\n");
+    }
+}
+
 void receive_file(char *file, int sock)
 {
     char file_buffer[10000];
@@ -121,6 +152,7 @@ void receive_file(char *file, int sock)
         printf("\n\n Recebendo arquivo... \n\n");
         file_buffer[n] = '\0';
         fflush(stdout);
+        unlink(file);
         fp = fopen(file, "w");
         fputs(file_buffer, fp);
         fclose(fp);
@@ -129,98 +161,132 @@ void receive_file(char *file, int sock)
 
     printf("\n\n Arquivo recebido \n\n");
     char response[] = "done";
-    send(sock, response, strlen(response)+1, 0);
+    send(sock, response, strlen(response) + 1, 0);
 }
 
-
-void sync_clint_local_files(char *user_folder, int sock){
-  int read_size;
-  node_t *cursor = head;
-  //Aguardo nome do arquivo
-  char file_name[MAXNAME];
-  if ((read_size = recv(sock, file_name, sizeof(file_name), 0)) < 0)
-  {
-      printf("Erro ao receber nome do arquivo\n");
-  }
-  file_name[read_size] = '\0';
-
-  // envia acknowledge que recebeu
-  char ack[] = "ack";
-  send(sock, ack, strlen(ack)+1, 0);
-
-  time_t lm;
-  // recebe o last modified
- if ((read_size = recv(sock, &lm, sizeof(lm), 0)) < 0)
-  {
-      printf("Erro ao receber resposta\n");
-  }
-  lm = ntohl(lm);
-
-
-  printf("Pasta do usuário >>%s<<\n", user_folder);
-  while (cursor != NULL) {
-    printf("Nome do arquivo recebido %s\n", file_name);
-    printf("Nome do cliente atual >>%s<<\n", cursor->cli->userid);
-
-    printf("userid: %s\n", cursor->cli->userid);
-    printf("userfolder: %s\n", user_folder);
-
-
-
-    if(strcmp(cursor->cli->userid,user_folder) == 0) {
-
-        printf("Encontrou usuário: %s\n", user_folder);
-        //Encontrado o cliente varre os arquivos dele para verificar se existe dado arquivo
-        int file_i = 0;
-        int has_file = 0;
-        while(file_i < MAXFILES && has_file == 0) {
-            if(strcmp(cursor->cli->f_info[file_i].name, file_name) == 0){
-                printf("Nome do arquivo do servidor: %s\n", cursor->cli->f_info[file_i].name);
-                has_file = 1;
-                printf("Verificando versão mais atual...\n");
-
-                char sync_local_command_reponse[20];
-                if (lm < cursor->cli->f_info[file_i].last_modified) { // se o arquivo do servidor for mais atual
-                    strcpy(sync_local_command_reponse,"updatelocal");
-                    send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
-                    //TODO
-                }
-                else if (lm > cursor->cli->f_info[file_i].last_modified) { //se o arquivo do usuario for mais atual
-                    strcpy(sync_local_command_reponse,"updateserver");
-                    send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
-                    //TODO
-                }
-
-
-            }
-            file_i++;
-        }
-        if(has_file == 0) {
-            printf("Arquivo nao encontrado no servidor \n");
-            //Avisa cliente que ele deve enviar arquivo
-            char sync_local_command_reponse[20];
-            strcpy(sync_local_command_reponse,"new_file");
-            send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
-            //Aguardo nome do arquivo
-            char file_name[MAXNAME];
-            if ((read_size = recv(sock, file_name, sizeof(file_name), 0)) < 0)
-            {
-                printf("Erro ao receber nome do arquivo\n");
-            }
-            file_name[read_size] = '\0';
-            receive_file(file_name, sock);
-
-        }
-        break;
-    } else {
-        cursor = cursor->next;
+void sync_clint_local_files(char *user_folder, int sock)
+{
+    int read_size;
+    node_t *cursor = head;
+    //Aguardo nome do arquivo
+    char file_name[MAXNAME];
+    if ((read_size = recv(sock, file_name, sizeof(file_name), 0)) < 0)
+    {
+        printf("Erro ao receber nome do arquivo\n");
     }
+    file_name[read_size] = '\0';
 
-  }
+    // envia acknowledge que recebeu
+    char ack[] = "ack";
+    send(sock, ack, strlen(ack) + 1, 0);
 
+    time_t lm;
+    // recebe o last modified
+    if ((read_size = recv(sock, &lm, sizeof(lm), 0)) < 0)
+    {
+        printf("Erro ao receber resposta\n");
+    }
+    lm = ntohl(lm);
+
+    printf("Pasta do usuário >>%s<<\n", user_folder);
+    while (cursor != NULL)
+    {
+        printf("Nome do arquivo recebido %s\n", file_name);
+        printf("Nome do cliente atual >>%s<<\n", cursor->cli->userid);
+
+        printf("userid: %s\n", cursor->cli->userid);
+        printf("userfolder: %s\n", user_folder);
+
+        if (strcmp(cursor->cli->userid, user_folder) == 0)
+        {
+
+            printf("Encontrou usuário: %s\n", user_folder);
+            //Encontrado o cliente varre os arquivos dele para verificar se existe dado arquivo
+            int file_i = 0;
+            int has_file = 0;
+            while (file_i < MAXFILES && has_file == 0)
+            {
+                //TODO Levar em conta a extensão do arquivo nessa comparação
+                if (strcmp(cursor->cli->f_info[file_i].name, file_name) == 0)
+                {
+                    printf("Nome do arquivo do servidor: %s\n", cursor->cli->f_info[file_i].name);
+                    has_file = 1;
+                    printf("Verificando versão mais atual...\n");
+;                    char sync_local_command_reponse[20];
+                    if ((lm - cursor->cli->f_info[file_i].last_modified) < -5)
+                    { // se o arquivo do servidor for mais atual, com um espaco de 5 segundos
+                        printf("Arquivo do servidor é mais novo \n");
+
+                        printf("lm? %s \n", ctime(&lm));
+                        printf("lm2? %s \n", ctime(&(cursor->cli->f_info[file_i].last_modified)));
+
+                        strcpy(sync_local_command_reponse, "updatelocal");
+                        send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
+                        FILE *fp;
+                        char file_to_send[50];
+                        snprintf(file_to_send, sizeof(file_to_send), "%s/%s.%s", user_folder,file_name, cursor->cli->f_info[file_i].extension );
+                        printf("Verificando se arquivo existe: ->%s<- \n", file_name);
+                        if ((fp = fopen(file_to_send, "r")) == NULL)
+                        {
+                            printf("Arquivo não encontrado\n");
+                        }
+                        else
+                        {
+                            printf("\nArquivo encontrado\n");
+                            send_file(file_to_send, fp,  sock);
+                        }
+                    }
+                    else if ((lm - cursor->cli->f_info[file_i].last_modified) > 5)
+                    { //se o arquivo do usuario for mais atual, com um espaco de 5 segundos
+                        printf("Arquivo do usuário é mais novo \n");
+
+                        printf("lm? %s \n", ctime(&lm));
+                        printf("lm2? %s \n", ctime(&(cursor->cli->f_info[file_i].last_modified)));
+
+                        strcpy(sync_local_command_reponse, "updateserver");
+                        send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
+                        cursor->cli->f_info[file_i].last_modified = lm;                                // TODO Foi feito a atribuição, as não sei se funciona (ATUALIZA COM O LAST MODIFIED MAIS RECENTE)
+                        //Aguardo nome do arquivo
+                        char file_name[MAXNAME];
+                        if ((read_size = recv(sock, file_name, sizeof(file_name), 0)) < 0)
+                        {
+                            printf("Erro ao receber nome do arquivo\n");
+                        }
+                        file_name[read_size] = '\0';
+                        receive_file(file_name, sock);
+                    }
+                    else {
+                        printf("Arquivos sao iguais\n");
+                        strcpy(sync_local_command_reponse, "iguais");
+                        send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
+                    }
+                }
+                file_i++;
+            }
+            if (has_file == 0)
+            {
+                printf("Arquivo nao encontrado no servidor \n");
+                //Avisa cliente que ele deve enviar arquivo
+                char sync_local_command_reponse[20];
+                strcpy(sync_local_command_reponse, "new_file");
+                send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
+                //Aguardo nome do arquivo
+                char file_name[MAXNAME];
+                if ((read_size = recv(sock, file_name, sizeof(file_name), 0)) < 0)
+                {
+                    printf("Erro ao receber nome do arquivo\n");
+                }
+                file_name[read_size] = '\0';
+                receive_file(file_name, sock);
+            }
+            break;
+        }
+        else
+        {
+            cursor = cursor->next;
+        }
+    }
 }
-
-
 
 /*
  * Controla a conexao para cada cliente. Uma thread para cada
@@ -264,15 +330,14 @@ void *connection_handler(void *socket_desc)
         }
         else if (strcmp(command, "sync_local") == 0)
         {
-          printf("Iniciando sincronização...\n");
-          sync_clint_local_files(user_folder, sock);
+            printf("Iniciando sincronização...\n");
+            sync_clint_local_files(user_folder, sock);
         }
-        else if (strcmp(command, "list") == 0) {
+        else if (strcmp(command, "list") == 0)
+        {
             printf("\n\n Comando List recebido \n\n");
 
-
             //Informa os arquivos salvos no servidor
-
         }
         else
         {
@@ -295,10 +360,12 @@ void *connection_handler(void *socket_desc)
     return 0;
 }
 
-node_t* create(client_t* cli, node_t* next) {
-    int i=0;
-    node_t* new_node_t = (node_t*)malloc(sizeof(node_t));
-    if (new_node_t == NULL) {
+node_t *create(client_t *cli, node_t *next)
+{
+    int i = 0;
+    node_t *new_node_t = (node_t *)malloc(sizeof(node_t));
+    if (new_node_t == NULL)
+    {
         printf("Erro criado um novo nodo.\n");
         exit(0);
     }
@@ -308,8 +375,9 @@ node_t* create(client_t* cli, node_t* next) {
     return new_node_t;
 }
 
-node_t* prepend(node_t* head, client_t* cli) {
-    node_t* new_node_t = create(cli, head);
+node_t *prepend(node_t *head, client_t *cli)
+{
+    node_t *new_node_t = create(cli, head);
     head = new_node_t;
 
     return head;
@@ -323,10 +391,12 @@ node_t* prepend(node_t* head, client_t* cli) {
     }
 }*/
 
-int count(node_t *head) {
+int count(node_t *head)
+{
     node_t *cursor = head;
     int c = 0;
-    while (cursor != NULL) {
+    while (cursor != NULL)
+    {
         c++;
         cursor = cursor->next;
     }
@@ -334,52 +404,63 @@ int count(node_t *head) {
     return c;
 }
 
-node_t* append(node_t* head, client_t* cli) {
+node_t *append(node_t *head, client_t *cli)
+{
     //vai ate o ultimo nodo
     node_t *cursor = head;
-    while (cursor->next != NULL) {
+    while (cursor->next != NULL)
+    {
         cursor = cursor->next;
     }
 
     //cria um novo nodo
-    node_t* new_node_t = create(cli, NULL);
+    node_t *new_node_t = create(cli, NULL);
     cursor->next = new_node_t;
 
     return head;
-
 }
 
-node_t* create_client_list(node_t* head) {
+node_t *create_client_list(node_t *head)
+{
     DIR *d;
     struct dirent *dir;
     d = opendir(".");
-    if (d) {
-        while ((dir = readdir(d)) != NULL) {
-            if (dir->d_type == DT_DIR) { // se eh um diretorio
-                if (dir->d_name[0] != '.') { // se eh um diretorio valido
+    if (d)
+    {
+        while ((dir = readdir(d)) != NULL)
+        {
+            if (dir->d_type == DT_DIR)
+            { // se eh um diretorio
+                if (dir->d_name[0] != '.')
+                { // se eh um diretorio valido
                     char name[9];
                     strncpy(name, dir->d_name, 8);
                     name[8] = '\0';
 
-                    if (strcmp(name, "sync_dir")) { // se nao eh uma pasta pertencente ao usuario
-                        client_t* cli = malloc(sizeof(client_t));
+                    if (strcmp(name, "sync_dir"))
+                    { // se nao eh uma pasta pertencente ao usuario
+                        client_t *cli = malloc(sizeof(client_t));
                         cli->devices[0] = 0;
                         cli->devices[1] = 0;
                         strcpy(cli->userid, dir->d_name);
 
                         DIR *user_d;
-                        struct dirent  *user_f;
+                        struct dirent *user_f;
 
                         user_d = opendir(cli->userid);
-                        if (user_d) {
+                        if (user_d)
+                        {
                             int f_i = 0;
 
-                            while ((user_f = readdir(user_d)) != NULL) {
-                                if (user_f->d_name[0] != '.') {
+                            while ((user_f = readdir(user_d)) != NULL)
+                            {
+                                if (user_f->d_name[0] != '.')
+                                {
                                     // separa nome e extensao de arquivo
                                     int file_name_i = 0;
                                     // preenche nome do arquivo
-                                    while (user_f->d_name[file_name_i] != '.') {
+                                    while (user_f->d_name[file_name_i] != '.')
+                                    {
                                         cli->f_info[f_i].name[file_name_i] = user_f->d_name[file_name_i];
                                         file_name_i++;
                                     }
@@ -389,7 +470,8 @@ node_t* create_client_list(node_t* head) {
 
                                     //preenche extensao do arquivo
                                     int file_extension_i = 0;
-                                    while (user_f->d_name[file_name_i] != '\0') {
+                                    while (user_f->d_name[file_name_i] != '\0')
+                                    {
                                         cli->f_info[f_i].extension[file_extension_i] = user_f->d_name[file_name_i];
                                         file_extension_i++;
                                         file_name_i++;
@@ -398,28 +480,25 @@ node_t* create_client_list(node_t* head) {
 
                                     struct stat attr;
                                     // gera a string do path do arquivo
-                                    char path[MAXNAME*2];
-                                    strcpy(path,cli->userid);
+                                    char path[MAXNAME * 2];
+                                    strcpy(path, cli->userid);
                                     path[strlen(cli->userid)] = '/';
-                                    strcpy(path+strlen(cli->userid)+1, user_f->d_name);
+                                    strcpy(path + strlen(cli->userid) + 1, user_f->d_name);
 
                                     stat(path, &attr);
                                     // preenche campo ultima modificacao
                                     cli->f_info[f_i].last_modified = attr.st_mtime;
 
-
                                     f_i++;
                                 }
                             }
-
                         }
                         closedir(user_d);
 
                         cli->logged_in = 0;
 
                         // gera o nodo e o adiciona na lista
-                        head = prepend(head,cli);
-
+                        head = prepend(head, cli);
 
                         printf("Criado cliente. nome: %s. Nome do primeiro arquivo(soh para mostrar q funciona): %s Extensao: %s\n", cli->userid, cli->f_info[0].name, cli->f_info[0].extension);
                     }
