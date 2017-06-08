@@ -152,6 +152,7 @@ void receive_file(char *file, int sock)
         printf("\n\n Recebendo arquivo... \n\n");
         file_buffer[n] = '\0';
         fflush(stdout);
+        unlink(file);
         fp = fopen(file, "w");
         fputs(file_buffer, fp);
         fclose(fp);
@@ -211,10 +212,13 @@ void sync_clint_local_files(char *user_folder, int sock)
                     printf("Nome do arquivo do servidor: %s\n", cursor->cli->f_info[file_i].name);
                     has_file = 1;
                     printf("Verificando versão mais atual...\n");
-
                     char sync_local_command_reponse[20];
-                    if (lm < cursor->cli->f_info[file_i].last_modified)
-                    { // se o arquivo do servidor for mais atual
+                    if ((lm - cursor->cli->f_info[file_i].last_modified) < -5)
+                    { // se o arquivo do servidor for mais atual, com um espaco de 5 segundos
+                        printf("Arquivo do servidor é mais novo \n");
+
+                        printf("lm? %s \n", ctime(&lm));
+                        printf("lm2? %s \n", ctime(&(cursor->cli->f_info[file_i].last_modified)));
                         strcpy(sync_local_command_reponse, "updatelocal");
                         send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
                         FILE *fp;
@@ -231,12 +235,16 @@ void sync_clint_local_files(char *user_folder, int sock)
                             send_file(file_to_send, fp,  sock);
                         }
                     }
-                    else if (lm > cursor->cli->f_info[file_i].last_modified)
-                    { //se o arquivo do usuario for mais atual
+                    else if ((lm - cursor->cli->f_info[file_i].last_modified) > 5)
+                    { //se o arquivo do usuario for mais atual, com um espaco de 5 segundos
+                        printf("Arquivo do usuário é mais novo \n");
+
+                        printf("lm? %s \n", ctime(&lm));
+                        printf("lm2? %s \n", ctime(&(cursor->cli->f_info[file_i].last_modified)));
+
                         strcpy(sync_local_command_reponse, "updateserver");
                         send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
                         cursor->cli->f_info[file_i].last_modified = lm;                                // TODO Foi feito a atribuição, as não sei se funciona (ATUALIZA COM O LAST MODIFIED MAIS RECENTE)
-                        printf("Arquivo do usuário é mais novo \n");
                         //Aguardo nome do arquivo
                         char file_name[MAXNAME];
                         if ((read_size = recv(sock, file_name, sizeof(file_name), 0)) < 0)
@@ -245,6 +253,11 @@ void sync_clint_local_files(char *user_folder, int sock)
                         }
                         file_name[read_size] = '\0';
                         receive_file(file_name, sock);
+                    }
+                    else {
+                        printf("Arquivos sao iguais\n");
+                        strcpy(sync_local_command_reponse, "iguais");
+                        send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
                     }
                 }
                 file_i++;

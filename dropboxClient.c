@@ -151,6 +151,7 @@ void read_local_files()
                     file_name_i++;
                 }
                 current_local_file.name[file_name_i] = '\0';
+
                 printf("Verificando arquivo: %s\n", current_local_file.name);
                 file_name_i++;
                 //preenche extensao do arquivo
@@ -160,12 +161,13 @@ void read_local_files()
                     current_local_file.extension[file_extension_i] = user_f->d_name[file_name_i];
                     file_extension_i++;
                     file_name_i++;
-                }
+                } 
                 current_local_file.extension[file_extension_i] = '\0';
                 //Envia comando para sincronizar este arquivo
-                char sync_local_command[10];
+                char sync_local_command[20];
                 strcpy(sync_local_command, "sync_local");
-                send(sock, sync_local_command, strlen(sync_local_command), 0); //Envia apenas o comando
+                send(sock, sync_local_command, strlen(sync_local_command)+1, 0); //Envia apenas o comando
+
 
                 //Envia o nome do arquivo e o last modified para ver se ele existe e se sim, qual eh mais recente
                 struct stat attr;
@@ -197,7 +199,8 @@ void read_local_files()
                 if ((read_size = recv(sock, response, sizeof(response), 0)) < 0)
                 {
                     printf("Erro ao receber resposta\n");
-                }
+                } 
+
 
                 response[read_size] = '\0';
                 printf("Resposta do servidor: %s\n", response);
@@ -253,6 +256,9 @@ void read_local_files()
                         send_file(file_name, fp);
                     }
                 }
+                else if (strcmp(response, "iguais") == 0) {
+                    printf("Arquivo do usuario e do servidor sao iguais.\n");
+                }
             }
         }
     }
@@ -291,6 +297,7 @@ void get_file(char *file)
         printf("\n\n Recebendo arquivo... \n\n");
         file_buffer[n] = '\0';
         fflush(stdout);
+        unlink(file);
         fp = fopen(file, "w");
         fputs(file_buffer, fp);
         fclose(fp);
