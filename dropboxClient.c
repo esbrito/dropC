@@ -151,8 +151,9 @@ void read_local_files()
                     file_name_i++;
                 }
                 current_local_file.name[file_name_i] = '\0';
-                printf("Verificando arquivo: %s\n", current_local_file.name); 
-                              file_name_i++;
+
+                printf("Verificando arquivo: %s\n", current_local_file.name);
+                file_name_i++;
                 //preenche extensao do arquivo
                 int file_extension_i = 0;
                 while (user_f->d_name[file_name_i] != '\0')
@@ -166,6 +167,7 @@ void read_local_files()
                 char sync_local_command[20];
                 strcpy(sync_local_command, "sync_local");
                 send(sock, sync_local_command, strlen(sync_local_command)+1, 0); //Envia apenas o comando
+
 
                 //Envia o nome do arquivo e o last modified para ver se ele existe e se sim, qual eh mais recente
                 struct stat attr;
@@ -198,6 +200,7 @@ void read_local_files()
                 {
                     printf("Erro ao receber resposta\n");
                 } 
+
 
                 response[read_size] = '\0';
                 printf("Resposta do servidor: %s\n", response);

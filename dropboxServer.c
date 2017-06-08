@@ -212,14 +212,13 @@ void sync_clint_local_files(char *user_folder, int sock)
                     printf("Nome do arquivo do servidor: %s\n", cursor->cli->f_info[file_i].name);
                     has_file = 1;
                     printf("Verificando versão mais atual...\n");
-;                    char sync_local_command_reponse[20];
+                    char sync_local_command_reponse[20];
                     if ((lm - cursor->cli->f_info[file_i].last_modified) < -5)
                     { // se o arquivo do servidor for mais atual, com um espaco de 5 segundos
                         printf("Arquivo do servidor é mais novo \n");
 
                         printf("lm? %s \n", ctime(&lm));
                         printf("lm2? %s \n", ctime(&(cursor->cli->f_info[file_i].last_modified)));
-
                         strcpy(sync_local_command_reponse, "updatelocal");
                         send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
                         FILE *fp;
@@ -297,7 +296,7 @@ void *connection_handler(void *socket_desc)
     //Descritor do socket
     int sock = *(int *)socket_desc;
     int read_size;
-    char *message, command[20], user_folder[50];
+    char *message, command[10], user_folder[50];
 
     //Aguarda recebimento de mensagem do cliente. A primeira mensagem é pra definir quem ele é.
     if ((read_size = recv(sock, user_folder, sizeof(user_folder), 0)) < 0)
