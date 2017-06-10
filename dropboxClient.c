@@ -36,10 +36,12 @@ int main(int argc, char *argv[])
 
     int datalen = strlen(username); // # of bytes in data
     int tmp = htonl(datalen);
-    n = write(sock, (char*)&tmp, sizeof(tmp));
-    if (n < 0) error("ERROR writing to socket");
+    n = write(sock, (char *)&tmp, sizeof(tmp));
+    if (n < 0)
+        error("ERROR writing to socket");
     n = write(sock, username, datalen);
-    if (n < 0) error("ERROR writing to socket");
+    if (n < 0)
+        error("ERROR writing to socket");
 
     puts("Conectado com servidor! Seus arquivos serão sincronizados agora...");
     sync_client();
@@ -61,7 +63,6 @@ int main(int argc, char *argv[])
 
         if (strcmp(word, "download") == 0)
         {
-           
         }
 
         else if (strcmp(word, "upload") == 0)
@@ -70,13 +71,14 @@ int main(int argc, char *argv[])
             strcpy(upload_command, "upload");
 
             //Envia o comando para iniciar sincronização
-            int datalen = strlen(upload_command); 
+            int datalen = strlen(upload_command);
             int tmp = htonl(datalen);
-            int n = write(sock, (char*)&tmp, sizeof(tmp));
-            if (n < 0) error("ERROR writing to socket");
+            int n = write(sock, (char *)&tmp, sizeof(tmp));
+            if (n < 0)
+                error("ERROR writing to socket");
             n = write(sock, upload_command, datalen);
-            if (n < 0) error("ERROR writing to socket");
-
+            if (n < 0)
+                error("ERROR writing to socket");
 
             word = strsep(&command, " \n");
             printf("Arquivo a ser enviado: ->%s<- \n", word);
@@ -101,7 +103,6 @@ int main(int argc, char *argv[])
 
         else if (strcmp(word, "list") == 0)
         {
-            
         }
 
         else
@@ -131,6 +132,90 @@ int connect_server(char *host, int port)
     if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0)
     {
         return 1;
+    }
+}
+
+void ask_for_server_files()
+{
+    //Envia comando para obter arquivos somente existentes no servidor
+    char sync_server_command[20];
+    strcpy(sync_server_command, "sync_server");
+
+    //Envia o comando para iniciar sincronização
+    int datalen = strlen(sync_server_command);
+    int tmp = htonl(datalen);
+    int n = write(sock, (char *)&tmp, sizeof(tmp));
+    if (n < 0)
+        error("ERROR writing to socket");
+    n = write(sock, sync_server_command, datalen);
+    if (n < 0)
+        error("ERROR writing to socket");
+
+    //Vai ficar recebendo arquivos até servidor avisar que enviou todos que o cliente nao possuia
+    char file_name_with_extension[50];
+    while (!(strcmp(file_name_with_extension, "server_done") == 0))
+    {
+        //Aguardo nome do arquivo
+        int buflen;
+        n = read(sock, (char *)&buflen, sizeof(buflen));
+        if (n < 0)
+            error("ERROR reading from socket");
+        buflen = ntohl(buflen);
+        n = read(sock, file_name_with_extension, buflen);
+        if (n < 0)
+            error("ERROR reading from socket");
+        file_name_with_extension[n] = '\0';
+        printf("Tamanho: %d Mensagem: %s\n", buflen, file_name_with_extension);
+
+        if ((strcmp(file_name_with_extension, "server_done") == 0))
+            break;
+
+        FILE *fp;
+        printf("Verificando se arquivo existe: ->%s<- \n", file_name_with_extension);
+        if ((fp = fopen(file_name_with_extension, "r")) == NULL)
+        {
+            printf("Arquivo somente no servidor. Requisitando download\n");
+            char response[20];
+            strcpy(response, "new_file");
+
+            //Envia comando avisando para baixar arquivo pois nao existe no cliente só no servidor
+            datalen = strlen(response);
+            tmp = htonl(datalen);
+            n = write(sock, (char *)&tmp, sizeof(tmp));
+            if (n < 0)
+                error("ERROR writing to socket");
+            n = write(sock, response, datalen);
+            if (n < 0)
+                error("ERROR writing to socket");
+
+            //Aguardo nome do arquivo
+            int buflen;
+            n = read(sock, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                error("ERROR reading from socket");
+            buflen = ntohl(buflen);
+            n = read(sock, file_name_with_extension, buflen);
+            if (n < 0)
+                error("ERROR reading from socket");
+            file_name_with_extension[n] = '\0';
+            printf("Tamanho: %d Mensagem: %s\n", buflen, file_name_with_extension);
+
+            get_file(file_name_with_extension);
+        }else{
+
+            char response[20];
+            strcpy(response, "has_file_already");
+
+            //Envia comando avisando para nao baixar arquivo pois existe no cliente
+            datalen = strlen(response);
+            tmp = htonl(datalen);
+            n = write(sock, (char *)&tmp, sizeof(tmp));
+            if (n < 0)
+                error("ERROR writing to socket");
+            n = write(sock, response, datalen);
+            if (n < 0)
+                error("ERROR writing to socket");
+        }
     }
 }
 
@@ -169,20 +254,21 @@ void read_local_files()
                     current_local_file.extension[file_extension_i] = user_f->d_name[file_name_i];
                     file_extension_i++;
                     file_name_i++;
-                } 
+                }
                 current_local_file.extension[file_extension_i] = '\0';
                 //Envia comando para sincronizar este arquivo
                 char sync_local_command[20];
                 strcpy(sync_local_command, "sync_local");
-                
-                //Envia o comando para iniciar sincronização
-                int datalen = strlen(sync_local_command); 
-                int tmp = htonl(datalen);
-                int n = write(sock, (char*)&tmp, sizeof(tmp));
-                if (n < 0) error("ERROR writing to socket");
-                n = write(sock, sync_local_command, datalen);
-                if (n < 0) error("ERROR writing to socket");
 
+                //Envia o comando para iniciar sincronização
+                int datalen = strlen(sync_local_command);
+                int tmp = htonl(datalen);
+                int n = write(sock, (char *)&tmp, sizeof(tmp));
+                if (n < 0)
+                    error("ERROR writing to socket");
+                n = write(sock, sync_local_command, datalen);
+                if (n < 0)
+                    error("ERROR writing to socket");
 
                 struct stat attr;
                 // gera a string do path do arquivo
@@ -190,21 +276,21 @@ void read_local_files()
                 snprintf(path, sizeof(path), "%s/%s.%s", client_folder, current_local_file.name, current_local_file.extension);
                 //printf("\n\n\npath: %s\n\n\n", path);
 
-
                 //Envia nome do arquivo
-                datalen = strlen(current_local_file.name); 
+                datalen = strlen(current_local_file.name);
                 tmp = htonl(datalen);
-                n = write(sock, (char*)&tmp, sizeof(tmp));
-                if (n < 0) error("ERROR writing to socket");
+                n = write(sock, (char *)&tmp, sizeof(tmp));
+                if (n < 0)
+                    error("ERROR writing to socket");
                 n = write(sock, current_local_file.name, datalen);
-                if (n < 0) error("ERROR writing to socket");
+                if (n < 0)
+                    error("ERROR writing to socket");
 
                 stat(path, &attr);
                 current_local_file.last_modified = attr.st_mtime;
                 //printf("\n\n\nLMINT: %i\n\n\n",current_local_file.last_modified);
                 //printf("\n\n\nLMSTRING: %s\n\n\n",current_local_file.last_modified);
 
-              
                 // envia o last modified para o servidor
                 int lm = htonl(current_local_file.last_modified);
                 send(sock, &lm, sizeof(lm), 0);
@@ -285,7 +371,8 @@ void read_local_files()
                         send_file(file_name, fp);
                     }
                 }
-                else if (strcmp(response, "iguais") == 0) {
+                else if (strcmp(response, "iguais") == 0)
+                {
                     printf("Arquivo do usuario e do servidor sao iguais.\n");
                 }
             }
@@ -312,11 +399,12 @@ void sync_client()
     printf("\nInicializando sincronização...\n");
     printf("\nVarrendo arquivos locais...\n");
     read_local_files();
+    ask_for_server_files();
 }
 
 void get_file(char *file)
 {
-  
+
     char file_buffer[10000];
     FILE *fp;
     int n;
@@ -339,33 +427,36 @@ void get_file(char *file)
     fp = fopen(file, "w");
     fputs(file_buffer, fp);
     fclose(fp);
-    
+
     memset(file_buffer, 0, sizeof(file_buffer));
 
     printf("\n\n Arquivo recebido \n\n");
     char response[50];
-    strcpy(response,"done");
-     //Envia confirmacao de recebimento
-    int datalen = strlen(response); 
+    strcpy(response, "done");
+    //Envia confirmacao de recebimento
+    int datalen = strlen(response);
     int tmp = htonl(datalen);
-    n = write(sock, (char*)&tmp, sizeof(tmp));
-    if (n < 0) error("ERROR writing to socket");
+    n = write(sock, (char *)&tmp, sizeof(tmp));
+    if (n < 0)
+        error("ERROR writing to socket");
     n = write(sock, response, datalen);
-    if (n < 0) error("ERROR writing to socket");
-
+    if (n < 0)
+        error("ERROR writing to socket");
 }
 
 void send_file(char *file, FILE *fp)
 {
 
     //Envia o nome do arquivo já com o path da pasta do servidor para facilitar. Ex. eduardo/arquivo.txt
-    int datalen = strlen(file); 
+    int datalen = strlen(file);
     int tmp = htonl(datalen);
-    int n = write(sock, (char*)&tmp, sizeof(tmp));
-    if (n < 0) error("ERROR writing to socket");
+    int n = write(sock, (char *)&tmp, sizeof(tmp));
+    if (n < 0)
+        error("ERROR writing to socket");
     n = write(sock, file, datalen);
-    if (n < 0) error("ERROR writing to socket");
-    
+    if (n < 0)
+        error("ERROR writing to socket");
+
     char file_buffer[1000];
     char f_buffer[1000];
     while (!feof(fp)) //até acabar o arquivo
@@ -381,19 +472,20 @@ void send_file(char *file, FILE *fp)
     fclose(fp);
 
     //Enviando de fato arquivo
-    datalen = strlen(file_buffer); 
+    datalen = strlen(file_buffer);
     tmp = htonl(datalen);
-    n = write(sock, (char*)&tmp, sizeof(tmp));
-    if (n < 0) error("ERROR writing to socket");
+    n = write(sock, (char *)&tmp, sizeof(tmp));
+    if (n < 0)
+        error("ERROR writing to socket");
     n = write(sock, file_buffer, datalen);
-    if (n < 0) error("ERROR writing to socket");
-
+    if (n < 0)
+        error("ERROR writing to socket");
 
     memset(file_buffer, 0, sizeof(file_buffer));
     memset(f_buffer, 0, sizeof(f_buffer));
 
     char response[20];
-     int buflen;
+    int buflen;
     n = read(sock, (char *)&buflen, sizeof(buflen));
     if (n < 0)
         error("ERROR reading from socket");
