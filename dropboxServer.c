@@ -82,7 +82,7 @@ int main(int argc, char *argv[])
             return 1;
         }
 
-        //Realizado para não poder terminar antes da thread
+        //Realizado para não poder terminar antes das threads
         pthread_join(connection_client_thread, NULL);
         puts("Handler designado para o cliente");
     }
