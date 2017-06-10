@@ -61,16 +61,14 @@ int main(int argc, char *argv[])
 
         if (strcmp(word, "download") == 0)
         {
-            word = strsep(&command, " ");
-            //Obtem arquivo especificado
-            get_file(word);
+           
         }
 
         else if (strcmp(word, "upload") == 0)
         {
             char upload_command[20];
             strcpy(upload_command, "upload");
-            
+
             //Envia o comando para iniciar sincronização
             int datalen = strlen(upload_command); 
             int tmp = htonl(datalen);
@@ -252,7 +250,17 @@ void read_local_files()
                 {
                     printf("\nArquivo do servidor mais novo. Necessita atualizar a pasta do usuario\n");
                     char file_name_with_extension[50];
-                    snprintf(file_name_with_extension, sizeof(file_name_with_extension), "sync_dir_%s/%s.%s", username, current_local_file.name, current_local_file.extension);
+                    //Aguardo nome do arquivo
+                    int buflen;
+                    n = read(sock, (char *)&buflen, sizeof(buflen));
+                    if (n < 0)
+                        error("ERROR reading from socket");
+                    buflen = ntohl(buflen);
+                    n = read(sock, file_name_with_extension, buflen);
+                    if (n < 0)
+                        error("ERROR reading from socket");
+                    file_name_with_extension[n] = '\0';
+                    printf("Tamanho: %d Mensagem: %s\n", buflen, file_name_with_extension);
                     get_file(file_name_with_extension);
                 }
                 else if (strcmp(response, "updateserver") == 0)

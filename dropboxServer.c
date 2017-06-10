@@ -111,7 +111,7 @@ void create_user_folder(char *user_folder)
 void send_file(char *file, FILE *fp, int sock)
 {
 
-    //Envia o nome do arquivo já com o path da pasta do servidor para facilitar. Ex. eduardo/arquivo.txt
+    //Envia o nome do arquivo já com o path da pasta do servidor para facilitar. Ex. sync_dir_eduardo/arquivo.txt
     int datalen = strlen(file); 
     int tmp = htonl(datalen);
     int n = write(sock, (char*)&tmp, sizeof(tmp));
@@ -130,7 +130,7 @@ void send_file(char *file, FILE *fp, int sock)
         strcat(file_buffer, f_buffer);
     }
     strcat(file_buffer, f_buffer);
-    printf("Enviando arquivo para o servidor....\n");
+    printf("Enviando arquivo para o cliente....\n");
     fclose(fp);
 
     //Enviando de fato arquivo
@@ -217,7 +217,7 @@ void sync_client_local_files(char *user_folder, int sock)
     if (n < 0)
         error("ERROR reading from socket");
     file_name[n] = '\0';
-    printf("Tamanho: %d Mensagem: %s\n", buflen, user_folder);
+    printf("Tamanho: %d Mensagem: %s\n", buflen, file_name);
 
     time_t lm;
     // recebe o last modified
@@ -271,7 +271,11 @@ void sync_client_local_files(char *user_folder, int sock)
 
                         FILE *fp;
                         char file_to_send[50];
+                        char file_path[50];
+
                         snprintf(file_to_send, sizeof(file_to_send), "%s/%s.%s", user_folder, file_name, cursor->cli->f_info[file_i].extension);
+                        snprintf(file_path, sizeof(file_path), "sync_dir_%s/%s.%s", user_folder, file_name, cursor->cli->f_info[file_i].extension);
+
                         printf("Verificando se arquivo existe: ->%s<- \n", file_name);
                         if ((fp = fopen(file_to_send, "r")) == NULL)
                         {
@@ -280,7 +284,7 @@ void sync_client_local_files(char *user_folder, int sock)
                         else
                         {
                             printf("\nArquivo encontrado\n");
-                            send_file(file_to_send, fp, sock);
+                            send_file(file_path, fp, sock);
                         }
                     }
                     else if ((lm - cursor->cli->f_info[file_i].last_modified) > 5)
