@@ -111,7 +111,14 @@ void create_user_folder(char *user_folder)
 void send_file(char *file, FILE *fp, int sock)
 {
 
-    send(sock, file, strlen(file), 0);
+    //Envia o nome do arquivo já com o path da pasta do servidor para facilitar. Ex. eduardo/arquivo.txt
+    int datalen = strlen(file); 
+    int tmp = htonl(datalen);
+    int n = write(sock, (char*)&tmp, sizeof(tmp));
+    if (n < 0) error("ERROR writing to socket");
+    n = write(sock, file, datalen);
+    if (n < 0) error("ERROR writing to socket");
+    
     char file_buffer[1000];
     char f_buffer[1000];
     while (!feof(fp)) //até acabar o arquivo
@@ -123,21 +130,35 @@ void send_file(char *file, FILE *fp, int sock)
         strcat(file_buffer, f_buffer);
     }
     strcat(file_buffer, f_buffer);
-    printf("Enviando arquivo para o cliente....\n");
+    printf("Enviando arquivo para o servidor....\n");
     fclose(fp);
-    send(sock, file_buffer, strlen(file_buffer), 0);
+
+    //Enviando de fato arquivo
+    datalen = strlen(file_buffer); 
+    tmp = htonl(datalen);
+    n = write(sock, (char*)&tmp, sizeof(tmp));
+    if (n < 0) error("ERROR writing to socket");
+    n = write(sock, file_buffer, datalen);
+    if (n < 0) error("ERROR writing to socket");
+
+
     memset(file_buffer, 0, sizeof(file_buffer));
     memset(f_buffer, 0, sizeof(f_buffer));
 
     char response[20];
-    int read_size;
-    if ((read_size = recv(sock, response, sizeof(response), 0)) < 0)
-    {
-        printf("Erro ao receber resposta\n");
-    }
+     int buflen;
+    n = read(sock, (char *)&buflen, sizeof(buflen));
+    if (n < 0)
+        error("ERROR reading from socket");
+    buflen = ntohl(buflen);
+    n = read(sock, response, buflen);
+    if (n < 0)
+        error("ERROR reading from socket");
+    response[n] = '\0';
+    printf("Tamanho: %d Mensagem: %s\n", buflen, response);
     if (strcmp(response, "done"))
     {
-        printf("Arquivo enviado com sucesso!\n");
+        printf("Arquivo recebido com sucesso!\n");
     }
 }
 
@@ -147,41 +168,60 @@ void receive_file(char *file, int sock)
     FILE *fp;
     int n;
 
-    n = recv(sock, file_buffer, sizeof(file_buffer), 0);
-    {
-        printf("\n\n Recebendo arquivo... \n\n");
-        file_buffer[n] = '\0';
-        fflush(stdout);
-        unlink(file);
-        fp = fopen(file, "w");
-        fputs(file_buffer, fp);
-        fclose(fp);
-    }
+    //Recebe arquivo
+    int buflen;
+    n = read(sock, (char *)&buflen, sizeof(buflen));
+    if (n < 0)
+        error("ERROR reading from socket");
+    buflen = ntohl(buflen);
+    n = read(sock, file_buffer, buflen);
+    if (n < 0)
+        error("ERROR reading from socket");
+    file_buffer[n] = '\0';
+    printf("Tamanho: %d Mensagem: %s\n", buflen, file_buffer);
+
+    printf("\n\n Recebendo arquivo... \n\n");
+    fflush(stdout);
+    unlink(file);
+    fp = fopen(file, "w");
+    fputs(file_buffer, fp);
+    fclose(fp);
+    
     memset(file_buffer, 0, sizeof(file_buffer));
 
     printf("\n\n Arquivo recebido \n\n");
-    char response[] = "done";
-    send(sock, response, strlen(response) + 1, 0);
+    char response[50];
+    strcpy(response,"done");
+     //Envia confirmacao de recebimento
+    int datalen = strlen(response); 
+    int tmp = htonl(datalen);
+    n = write(sock, (char*)&tmp, sizeof(tmp));
+    if (n < 0) error("ERROR writing to socket");
+    n = write(sock, response, datalen);
+    if (n < 0) error("ERROR writing to socket");
 }
 
-void sync_clint_local_files(char *user_folder, int sock)
+void sync_client_local_files(char *user_folder, int sock)
 {
     int read_size;
     node_t *cursor = head;
-    //Aguardo nome do arquivo
     char file_name[MAXNAME];
-    if ((read_size = recv(sock, file_name, sizeof(file_name), 0)) < 0)
-    {
-        printf("Erro ao receber nome do arquivo\n");
-    }
-    file_name[read_size] = '\0';
 
-    // envia acknowledge que recebeu
-    char ack[] = "ack";
-    send(sock, ack, strlen(ack) + 1, 0);
+    //Aguardo nome do arquivo
+    int buflen;
+    int n = read(sock, (char *)&buflen, sizeof(buflen));
+    if (n < 0)
+        error("ERROR reading from socket");
+    buflen = ntohl(buflen);
+    n = read(sock, file_name, buflen);
+    if (n < 0)
+        error("ERROR reading from socket");
+    file_name[n] = '\0';
+    printf("Tamanho: %d Mensagem: %s\n", buflen, user_folder);
 
     time_t lm;
     // recebe o last modified
+    //NAO PRECISA RECEBER O TAMANHO ANTES JA QUE É UM VALOR INTEIRO E NAO STRING VARIAVEL
     if ((read_size = recv(sock, &lm, sizeof(lm), 0)) < 0)
     {
         printf("Erro ao receber resposta\n");
@@ -217,13 +257,21 @@ void sync_clint_local_files(char *user_folder, int sock)
                     { // se o arquivo do servidor for mais atual, com um espaco de 5 segundos
                         printf("Arquivo do servidor é mais novo \n");
 
-                        printf("lm? %s \n", ctime(&lm));
-                        printf("lm2? %s \n", ctime(&(cursor->cli->f_info[file_i].last_modified)));
+                        printf("Last modified cliente %s \n", ctime(&lm));
+                        printf("Last modified servidor: %s \n", ctime(&(cursor->cli->f_info[file_i].last_modified)));
                         strcpy(sync_local_command_reponse, "updatelocal");
-                        send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
+
+                        //Envia apenas o comando avisando o que deve ser feito
+                        int datalen = strlen(sync_local_command_reponse); 
+                        int tmp = htonl(datalen);
+                        n = write(sock, (char*)&tmp, sizeof(tmp));
+                        if (n < 0) error("ERROR writing to socket");
+                        n = write(sock, sync_local_command_reponse, datalen);
+                        if (n < 0) error("ERROR writing to socket");
+
                         FILE *fp;
                         char file_to_send[50];
-                        snprintf(file_to_send, sizeof(file_to_send), "%s/%s.%s", user_folder,file_name, cursor->cli->f_info[file_i].extension );
+                        snprintf(file_to_send, sizeof(file_to_send), "%s/%s.%s", user_folder, file_name, cursor->cli->f_info[file_i].extension);
                         printf("Verificando se arquivo existe: ->%s<- \n", file_name);
                         if ((fp = fopen(file_to_send, "r")) == NULL)
                         {
@@ -232,32 +280,56 @@ void sync_clint_local_files(char *user_folder, int sock)
                         else
                         {
                             printf("\nArquivo encontrado\n");
-                            send_file(file_to_send, fp,  sock);
+                            send_file(file_to_send, fp, sock);
                         }
                     }
                     else if ((lm - cursor->cli->f_info[file_i].last_modified) > 5)
                     { //se o arquivo do usuario for mais atual, com um espaco de 5 segundos
                         printf("Arquivo do usuário é mais novo \n");
 
-                        printf("lm? %s \n", ctime(&lm));
-                        printf("lm2? %s \n", ctime(&(cursor->cli->f_info[file_i].last_modified)));
+                        printf("Last modified cliente %s \n", ctime(&lm));
+                        printf("Last modified servidor: %s \n", ctime(&(cursor->cli->f_info[file_i].last_modified)));
+                        
+                        char sync_local_command_reponse[20];
 
                         strcpy(sync_local_command_reponse, "updateserver");
-                        send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
-                        cursor->cli->f_info[file_i].last_modified = lm;                                // TODO Foi feito a atribuição, as não sei se funciona (ATUALIZA COM O LAST MODIFIED MAIS RECENTE)
-                        //Aguardo nome do arquivo
+
+                        //Envia apenas o comando avisando o que deve ser feito
+                        int datalen = strlen(sync_local_command_reponse); 
+                        int tmp = htonl(datalen);
+                        n = write(sock, (char*)&tmp, sizeof(tmp));
+                        if (n < 0) error("ERROR writing to socket");
+                        n = write(sock, sync_local_command_reponse, datalen);
+                        if (n < 0) error("ERROR writing to socket");
+
+
+                        cursor->cli->f_info[file_i].last_modified = lm; // TODO Foi feito a atribuição, as não sei se funciona (ATUALIZA COM O LAST MODIFIED MAIS RECENTE)
                         char file_name[MAXNAME];
-                        if ((read_size = recv(sock, file_name, sizeof(file_name), 0)) < 0)
-                        {
-                            printf("Erro ao receber nome do arquivo\n");
-                        }
-                        file_name[read_size] = '\0';
+
+                        //Aguardo nome do arquivo
+                        int buflen;
+                        int n = read(sock, (char *)&buflen, sizeof(buflen));
+                        if (n < 0)
+                            error("ERROR reading from socket");
+                        buflen = ntohl(buflen);
+                        n = read(sock, file_name, buflen);
+                        if (n < 0)
+                            error("ERROR reading from socket");
+                        file_name[n] = '\0';
+                        printf("Tamanho: %d Mensagem: %s\n", buflen, user_folder);
                         receive_file(file_name, sock);
                     }
-                    else {
+                    else
+                    {
                         printf("Arquivos sao iguais\n");
                         strcpy(sync_local_command_reponse, "iguais");
-                        send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
+                        //Envia apenas o comando avisando o que deve ser feito
+                        int datalen = strlen(sync_local_command_reponse); 
+                        int tmp = htonl(datalen);
+                        n = write(sock, (char*)&tmp, sizeof(tmp));
+                        if (n < 0) error("ERROR writing to socket");
+                        n = write(sock, sync_local_command_reponse, datalen);
+                        if (n < 0) error("ERROR writing to socket");
                     }
                 }
                 file_i++;
@@ -268,14 +340,27 @@ void sync_clint_local_files(char *user_folder, int sock)
                 //Avisa cliente que ele deve enviar arquivo
                 char sync_local_command_reponse[20];
                 strcpy(sync_local_command_reponse, "new_file");
-                send(sock, sync_local_command_reponse, strlen(sync_local_command_reponse), 0); //Envia apenas o comando avisando o que deve ser feito
-                //Aguardo nome do arquivo
+                
+                //Envia apenas o comando avisando o que deve ser feito
+                int datalen = strlen(sync_local_command_reponse); 
+                int tmp = htonl(datalen);
+                n = write(sock, (char*)&tmp, sizeof(tmp));
+                if (n < 0) error("ERROR writing to socket");
+                n = write(sock, sync_local_command_reponse, datalen);
+                if (n < 0) error("ERROR writing to socket");
+
                 char file_name[MAXNAME];
-                if ((read_size = recv(sock, file_name, sizeof(file_name), 0)) < 0)
-                {
-                    printf("Erro ao receber nome do arquivo\n");
-                }
-                file_name[read_size] = '\0';
+                //Aguardo nome do arquivo
+                int buflen;
+                int n = read(sock, (char *)&buflen, sizeof(buflen));
+                if (n < 0)
+                    error("ERROR reading from socket");
+                buflen = ntohl(buflen);
+                n = read(sock, file_name, buflen);
+                if (n < 0)
+                    error("ERROR reading from socket");
+                file_name[n] = '\0';
+                printf("Tamanho: %d Mensagem: %s\n", buflen, user_folder);
                 receive_file(file_name, sock);
             }
             break;
@@ -296,41 +381,62 @@ void *connection_handler(void *socket_desc)
     //Descritor do socket
     int sock = *(int *)socket_desc;
     int read_size;
-    char *message, command[10], user_folder[50];
+    char *message;
+    char command[10];
+    char user_folder[50];
 
     //Aguarda recebimento de mensagem do cliente. A primeira mensagem é pra definir quem ele é.
-    if ((read_size = recv(sock, user_folder, sizeof(user_folder), 0)) < 0)
-    {
-        printf("Erro ao receber nome do usuario\n");
-    }
-    user_folder[read_size] = '\0';
+    int buflen;
+    int n = read(sock, (char *)&buflen, sizeof(buflen));
+    if (n < 0)
+        error("ERROR reading from socket");
+    buflen = ntohl(buflen);
+    n = read(sock, user_folder, buflen);
+    if (n < 0)
+        error("ERROR reading from socket");
+    user_folder[n] = '\0';
+    printf("Tamanho: %d Mensagem: %s\n", buflen, user_folder);
+
     //TODO Verifica se já tem o máximo de usuarios logados com aquela conta
     //Cria pasta para usuário caso nao exista
     create_user_folder(user_folder);
     printf("\n\n Pasta encontrada/criada com sucesso \n\n");
     //Aguarda comandos e os executa
-    while ((read_size = recv(sock, command, sizeof(command), 0)) > 0)
+    int command_size;
+    while (n = read(sock, (char *)&command_size, sizeof(command_size)) > 0)
     {
-        command[read_size] = '\0';
+        if (n < 0)
+            error("ERROR reading from socket");
+        command_size = ntohl(command_size);
+        n = read(sock, command, command_size);
+        if (n < 0)
+            error("ERROR reading from socket");
+        command[n] = '\0';
+        printf("Tamanho: %d Mensagem: %s\n", command_size, command);
         printf("\n\n Comando recebido >>%s<<\n\n", command);
         if (strcmp(command, "download") == 0)
         {
         }
         else if (strcmp(command, "upload") == 0)
         {
-            //Aguardo nome do arquivo
             char file_name[50];
-            if ((read_size = recv(sock, file_name, sizeof(file_name), 0)) < 0)
-            {
-                printf("Erro ao receber nome do arquivo\n");
-            }
-            file_name[read_size] = '\0';
+            //Aguardo nome do arquivo
+            buflen;
+            n = read(sock, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                error("ERROR reading from socket");
+            buflen = ntohl(buflen);
+            n = read(sock, file_name, buflen);
+            if (n < 0)
+                error("ERROR reading from socket");
+            file_name[n] = '\0';
+            printf("Tamanho: %d Mensagem: %s\n", buflen, user_folder);
             receive_file(file_name, sock);
         }
         else if (strcmp(command, "sync_local") == 0)
         {
             printf("Iniciando sincronização...\n");
-            sync_clint_local_files(user_folder, sock);
+            sync_client_local_files(user_folder, sock);
         }
         else if (strcmp(command, "list") == 0)
         {
@@ -464,7 +570,6 @@ node_t *create_client_list(node_t *head)
                                         file_name_i++;
                                     }
                                     cli->f_info[f_i].name[file_name_i] = '\0';
-                                    printf("");
                                     file_name_i++;
 
                                     //preenche extensao do arquivo
