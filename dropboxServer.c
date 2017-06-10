@@ -20,10 +20,14 @@ node_t *create_client_list(node_t *head);
 //Terá que se protegido por mutex
 node_t *head;
 
+//Usado para apenas um sincronizar por vez
+sem_t sync_semaphore;
+
 //Thread responsável pela conexão. Uma pra cada cliente conectado
 
 int main(int argc, char *argv[])
 {
+    sem_init(&sync_semaphore, 0, 1);
 
     head = NULL;
     head = create_client_list(head);
@@ -64,13 +68,15 @@ int main(int argc, char *argv[])
         return 1;
     }
     //Listen
-    listen(socket_desc, 3);
-
-    //Accept and incoming connection
-    puts("Aguardando conexoes...");
-    c = sizeof(struct sockaddr_in);
-    while ((client_sock = accept(socket_desc, (struct sockaddr *)&client, (socklen_t *)&c)))
+    while (1)
     {
+        listen(socket_desc, 3);
+
+        //Accept and incoming connection
+        puts("Aguardando conexoes...");
+        c = sizeof(struct sockaddr_in);
+
+        client_sock = accept(socket_desc, (struct sockaddr *)&client, (socklen_t *)&c);
         puts("Realizada conexao");
         pthread_t connection_client_thread;
         socket_new = malloc(1);
@@ -82,8 +88,6 @@ int main(int argc, char *argv[])
             return 1;
         }
 
-        //Realizado para não poder terminar antes da thread
-        pthread_join(connection_client_thread, NULL);
         puts("Handler designado para o cliente");
     }
 
@@ -208,6 +212,7 @@ void receive_file(char *file, int sock)
 
 void sync_server_files(char *user_folder, int sock)
 {
+    sem_wait(&sync_semaphore);
     DIR *user_d;
     struct dirent *user_f;
     int read_size;
@@ -243,9 +248,8 @@ void sync_server_files(char *user_folder, int sock)
                 }
                 current_local_file.extension[file_extension_i] = '\0';
 
-                 char file_name[MAXNAME];
+                char file_name[MAXNAME];
                 snprintf(file_name, sizeof(file_name), "sync_dir_%s/%s.%s", user_folder, current_local_file.name, current_local_file.extension);
-                        
 
                 //Envia nome do arquivo
                 int datalen = strlen(file_name);
@@ -309,13 +313,14 @@ void sync_server_files(char *user_folder, int sock)
         n = write(sock, done, datalen);
         if (n < 0)
             error("ERROR writing to socket");
-
     }
     closedir(user_d);
+    sem_post(&sync_semaphore);
 }
 
 void sync_client_local_files(char *user_folder, int sock)
 {
+    sem_wait(&sync_semaphore);
     int read_size;
     node_t *cursor = head;
     char file_name[MAXNAME];
@@ -494,6 +499,7 @@ void sync_client_local_files(char *user_folder, int sock)
             cursor = cursor->next;
         }
     }
+    sem_post(&sync_semaphore);
 }
 
 /*

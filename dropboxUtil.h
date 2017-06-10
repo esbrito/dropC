@@ -8,6 +8,8 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <time.h>
+#include <semaphore.h>
+
 
 
 #define MAXNAME 50
