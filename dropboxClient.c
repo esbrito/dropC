@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <pthread.h>
 
 int sock;
 struct client user;
@@ -221,7 +222,7 @@ void ask_for_server_files()
 
 void read_local_files()
 {
-
+    printf("\nVarrendo arquivos locais...\n");
     DIR *user_d;
     struct dirent *user_f;
     int read_size;
@@ -379,6 +380,10 @@ void read_local_files()
         }
     }
     closedir(user_d);
+    ask_for_server_files();
+    printf("antes\n");
+    sleep(10);
+    printf("depois\n");
 }
 
 void sync_client()
@@ -396,10 +401,14 @@ void sync_client()
             perror("Erro ao criar pasta...\n");
         }
     }
+
     printf("\nInicializando sincronização...\n");
-    printf("\nVarrendo arquivos locais...\n");
-    read_local_files();
-    ask_for_server_files();
+    pthread_t sync_thread;
+    if (pthread_create(&sync_thread, NULL, read_local_files, NULL) < 0)
+    {
+        perror("Falha ao criar a thread");
+    }
+
 }
 
 void get_file(char *file)
