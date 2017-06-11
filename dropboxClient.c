@@ -69,6 +69,11 @@ int main(int argc, char *argv[])
         printf(">>");
         fgets(message, 100, stdin);
         char *command = strdup(message);
+
+        if (command[4] == 10) { // se for comando list, o ultimo caractere vai ser linefeed e nao /0. isso corrige.
+            command[4] = '\0';
+        }
+
         char *word = strsep(&command, " ");
         printf("\nComando digitado: %s\n", word);
 
