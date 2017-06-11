@@ -75,7 +75,11 @@ int main(int argc, char *argv[])
         if (strcmp(word, "download") == 0)
         {
         }
-
+        else if (strcmp(word, "exit") == 0)
+        {
+            printf("Saindo...");
+            close_connection();
+        }
         else if (strcmp(word, "upload") == 0)
         {
             char upload_command[20];
@@ -150,13 +154,36 @@ int main(int argc, char *argv[])
                 if (n < 0)
                     error("ERROR writing to socket");
 
-
                 send_file(file_name, file_extension, fp);
             }
         }
 
         else if (strcmp(word, "list") == 0)
         {
+            char list_command[20];
+            strcpy(list_command, "list");
+
+            int datalen = strlen(list_command);
+            int tmp = htonl(datalen);
+            int n = write(sock, (char *)&tmp, sizeof(tmp));
+            if (n < 0)
+                error("ERROR writing to socket");
+            n = write(sock, list_command, datalen);
+            if (n < 0)
+                error("ERROR writing to socket");
+
+            char str[1000];
+            //Aguarda a string contendo a lista
+            int buflen;
+            n = read(sock, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                printf("ERROR reading from socket");
+            buflen = ntohl(buflen);
+            n = read(sock, str, buflen);
+            if (n < 0)
+                printf("ERROR reading from socket");
+
+            puts(str);
         }
 
         else
@@ -219,16 +246,16 @@ void ask_for_server_files()
         if (n < 0)
             error("ERROR reading from socket");
         file_name_with_extension[n] = '\0';
-        //printf("Tamanho: %d Mensagem: %s\n", buflen, file_name_with_extension);
+        printf("Tamanho: %d Mensagem: %s\n", buflen, file_name_with_extension);
 
         if ((strcmp(file_name_with_extension, "server_done") == 0))
             break;
 
         FILE *fp;
-        //printf("Verificando se arquivo existe: ->%s<- \n", file_name_with_extension);
+        printf("Verificando se arquivo existe: ->%s<- \n", file_name_with_extension);
         if ((fp = fopen(file_name_with_extension, "r")) == NULL)
         {
-            //printf("Arquivo somente no servidor. Requisitando download\n");
+            printf("Arquivo somente no servidor. Requisitando download\n");
             char response[20];
             strcpy(response, "new_file");
 
@@ -252,7 +279,7 @@ void ask_for_server_files()
             if (n < 0)
                 error("ERROR reading from socket");
             file_name_with_extension[n] = '\0';
-            //printf("Tamanho: %d Mensagem: %s\n", buflen, file_name_with_extension);
+            printf("Tamanho: %d Mensagem: %s\n", buflen, file_name_with_extension);
 
             get_file(file_name_with_extension);
         }
@@ -330,7 +357,7 @@ void *read_local_files()
                 if (n < 0)
                     error("ERROR reading from socket");
                 response[n] = '\0';
-                //printf("Tamanho: %d Mensagem: %s\n", buflen, response);
+                printf("Tamanho: %d Mensagem: %s\n", buflen, response);
                 if (strcmp(response, "done"))
                 {
                     printf("Arquivo deletado com sucesso no servidor!\n");
@@ -364,7 +391,7 @@ void *read_local_files()
                     }
                     current_local_file.name[file_name_i] = '\0';
 
-                    //printf("Verificando arquivo: %s\n", current_local_file.name);
+                    printf("Verificando arquivo: %s\n", current_local_file.name);
                     file_name_i++;
                     //preenche extensao do arquivo
                     int file_extension_i = 0;
@@ -393,7 +420,7 @@ void *read_local_files()
                     // gera a string do path do arquivo
                     char path[MAXNAME * 2];
                     snprintf(path, sizeof(path), "%s/%s.%s", client_folder, current_local_file.name, current_local_file.extension);
-                    //printf("\n\n\npath: %s\n\n\n", path);
+                    printf("\n\n\npath: %s\n\n\n", path);
 
                     //Envia nome do arquivo
                     datalen = strlen(current_local_file.name);
@@ -407,8 +434,6 @@ void *read_local_files()
 
                     stat(path, &attr);
                     current_local_file.last_modified = attr.st_mtime;
-                    //printf("\n\n\nLMINT: %i\n\n\n",current_local_file.last_modified);
-                    //printf("\n\n\nLMSTRING: %s\n\n\n",current_local_file.last_modified);
 
                     // envia o last modified para o servidor
                     int lm = htonl(current_local_file.last_modified);
@@ -426,31 +451,31 @@ void *read_local_files()
                     if (n < 0)
                         error("ERROR reading from socket");
                     response[n] = '\0';
-                    //printf("Tamanho: %d Mensagem: %s\n", buflen, response);
-                    //printf("Resposta do servidor: %s\n", response);
+                    printf("Tamanho: %d Mensagem: %s\n", buflen, response);
+                    printf("Resposta do servidor: %s\n", response);
                     if (strcmp(response, "new_file") == 0)
                     {
-                        //printf("Arquivo não encontrado no servidor, sera enviado agora \n");
+                        printf("Arquivo não encontrado no servidor, sera enviado agora \n");
                         //Envia arquivo especificado
                         char file_name_with_extension[50];
                         snprintf(file_name_with_extension, sizeof(file_name_with_extension), "sync_dir_%s/%s.%s", username, current_local_file.name, current_local_file.extension);
                         // printf("Arquivo a ser enviado: ->%s<- \n", file_name_with_extension);
                         FILE *fp;
-                        //printf("Verificando se arquivo existe: ->%s<- \n", file_name_with_extension);
+                        printf("Verificando se arquivo existe: ->%s<- \n", file_name_with_extension);
                         if ((fp = fopen(file_name_with_extension, "r")) == NULL)
                         {
-                            //printf("Arquivo não encontrado\n");
+                            printf("Arquivo não encontrado\n");
                         }
                         else
                         {
-                            //printf("Arquivo encontrado\n");
+                            printf("Arquivo encontrado\n");
 
                             send_file(current_local_file.name, current_local_file.extension, fp);
                         }
                     }
                     if (strcmp(response, "updatelocal") == 0)
                     {
-                        //printf("\nArquivo do servidor mais novo. Necessita atualizar a pasta do usuario\n");
+                        printf("\nArquivo do servidor mais novo. Necessita atualizar a pasta do usuario\n");
                         char file_name_with_extension[50];
                         //Aguardo nome do arquivo
                         int buflen;
@@ -462,32 +487,32 @@ void *read_local_files()
                         if (n < 0)
                             error("ERROR reading from socket");
                         file_name_with_extension[n] = '\0';
-                        //printf("Tamanho: %d Mensagem: %s\n", buflen, file_name_with_extension);
+                        printf("Tamanho: %d Mensagem: %s\n", buflen, file_name_with_extension);
                         get_file(file_name_with_extension);
                     }
                     else if (strcmp(response, "updateserver") == 0)
                     {
-                        //printf("\nArquivo do usuario mais novo. Necessita atualizar o servidor\n");
+                        printf("\nArquivo do usuario mais novo. Necessita atualizar o servidor\n");
                         char file_name_with_extension[50];
-                        snprintf(file_name_with_extension, sizeof(file_name_with_extension), "sync_dir_%s/%s.%s", 
-                        username, current_local_file.name, current_local_file.extension);
-                        //printf("Arquivo a ser enviado: ->%s<- \n", file_name_with_extension);
+                        snprintf(file_name_with_extension, sizeof(file_name_with_extension), "sync_dir_%s/%s.%s",
+                                 username, current_local_file.name, current_local_file.extension);
+                        printf("Arquivo a ser enviado: ->%s<- \n", file_name_with_extension);
                         FILE *fp;
-                        //printf("Verificando se arquivo existe: ->%s<- \n", file_name_with_extension);
+                        printf("Verificando se arquivo existe: ->%s<- \n", file_name_with_extension);
                         if ((fp = fopen(file_name_with_extension, "r")) == NULL)
                         {
-                            //printf("Arquivo não encontrado\n");
+                            printf("Arquivo não encontrado\n");
                         }
                         else
                         {
-                            //printf("Arquivo encontrado\n");
+                            printf("Arquivo encontrado\n");
 
                             send_file(current_local_file.name, current_local_file.extension, fp);
                         }
                     }
                     else if (strcmp(response, "iguais") == 0)
                     {
-                        //printf("Arquivo do usuario e do servidor sao iguais.\n");
+                        printf("Arquivo do usuario e do servidor sao iguais.\n");
                     }
                     else if (strcmp(response, "delete_file") == 0)
                     {
@@ -523,8 +548,14 @@ void *read_local_files()
         printf("\t>> exit \n \n \n");
         printf(">>");
         fflush(stdout);
-        sleep(15);
+        sleep(20);
     }
+}
+
+void close_connection()
+{
+    close(sock);
+    exit(0);
 }
 
 void sync_client()
@@ -579,9 +610,9 @@ void get_file(char *file)
     if (n < 0)
         error("ERROR reading from socket");
     file_buffer[n] = '\0';
-    //printf("Tamanho: %d Mensagem: %s\n", buflen, file_buffer);
+    printf("Tamanho: %d Mensagem: %s\n", buflen, file_buffer);
 
-    //printf("\n\n Recebendo arquivo... \n\n");
+    printf("\n\n Recebendo arquivo... \n\n");
     fflush(stdout);
     unlink(file);
     fp = fopen(file, "w");
@@ -590,7 +621,7 @@ void get_file(char *file)
 
     memset(file_buffer, 0, sizeof(file_buffer));
 
-    //printf("\n\n Arquivo recebido \n\n");
+    printf("\n\n Arquivo recebido \n\n");
     char response[50];
     strcpy(response, "done");
     //Envia confirmacao de recebimento
@@ -608,7 +639,7 @@ void send_file(char *file_name, char *file_extension, FILE *fp)
 {
 
     //Envia o nome do arquivo
-    //printf("Enviando arquivo %s", file_name);
+    printf("Enviando arquivo %s", file_name);
     int datalen = strlen(file_name);
     int tmp = htonl(datalen);
     int n = write(sock, (char *)&tmp, sizeof(tmp));
@@ -618,7 +649,7 @@ void send_file(char *file_name, char *file_extension, FILE *fp)
     if (n < 0)
         error("ERROR writing to socket");
 
-    //printf("Enviando extensao %s", file_extension);
+    printf("Enviando extensao %s", file_extension);
 
     //Envia a extensão do arquivo
     datalen = strlen(file_extension);
@@ -670,9 +701,9 @@ void send_file(char *file_name, char *file_extension, FILE *fp)
     if (n < 0)
         error("ERROR reading from socket");
     response[n] = '\0';
-    //printf("Tamanho: %d Mensagem: %s\n", buflen, response);
+    printf("Tamanho: %d Mensagem: %s\n", buflen, response);
     if (strcmp(response, "done"))
     {
-        //printf("Arquivo recebido com sucesso!\n");
+        printf("Arquivo recebido com sucesso!\n");
     }
 }
