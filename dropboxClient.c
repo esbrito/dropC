@@ -59,6 +59,11 @@ int main(int argc, char *argv[])
         printf(">>");
         fgets(message, 100, stdin);
         char *command = strdup(message);
+
+        if (command[4] == 10) { // se for comando list, o ultimo caractere vai ser linefeed e nao /0. isso corrige.
+            command[4] = '\0';
+        }
+
         char *word = strsep(&command, " ");
         printf("\nComando digitado: %s\n", word);
 
@@ -104,6 +109,30 @@ int main(int argc, char *argv[])
 
         else if (strcmp(word, "list") == 0)
         {
+            char list_command[20];
+            strcpy(list_command, "list");
+
+            int datalen = strlen(list_command);
+            int tmp = htonl(datalen);
+            int n = write(sock, (char *)&tmp, sizeof(tmp));
+            if (n < 0)
+                error("ERROR writing to socket");
+            n = write(sock, list_command, datalen);
+            if (n < 0)
+                error("ERROR writing to socket");
+
+            char str[1000];
+            //Aguarda a string contendo a lista
+            int buflen;
+            n = read(sock, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                printf("ERROR reading from socket");
+            buflen = ntohl(buflen);
+            n = read(sock, str, buflen);
+            if (n < 0)
+                printf("ERROR reading from socket");
+
+            puts(str);
         }
 
         else
