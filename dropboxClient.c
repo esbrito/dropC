@@ -7,11 +7,20 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <sys/inotify.h>
+#include <limits.h>
+
+#define BUF_LEN (10 * (sizeof(struct inotify_event) + NAME_MAX + 1))
 
 int sock;
 struct client user;
 char client_folder[1024];
 char username[50];
+int inotifyFd, wd;
+char buf[BUF_LEN] __attribute__((aligned(8)));
+ssize_t numRead;
+char *p;
+struct inotify_event *event;
 
 int main(int argc, char *argv[])
 {
@@ -71,7 +80,7 @@ int main(int argc, char *argv[])
             char upload_command[20];
             strcpy(upload_command, "upload");
 
-            //Envia o comando para iniciar sincronização
+            //Envia o comando para iniciar o upload
             int datalen = strlen(upload_command);
             int tmp = htonl(datalen);
             int n = write(sock, (char *)&tmp, sizeof(tmp));
@@ -202,7 +211,9 @@ void ask_for_server_files()
             //printf("Tamanho: %d Mensagem: %s\n", buflen, file_name_with_extension);
 
             get_file(file_name_with_extension);
-        }else{
+        }
+        else
+        {
 
             char response[20];
             strcpy(response, "has_file_already");
@@ -222,84 +233,50 @@ void ask_for_server_files()
 
 void *read_local_files()
 {
-    while(1){
-    printf("\nVarrendo arquivos locais... FAVOR NAO REALIZAR NENHUM COMANDO\n");
-    DIR *user_d;
-    struct dirent *user_f;
-    int read_size;
-    // Abre pasta do cliente
-    user_d = opendir(client_folder);
-    if (user_d)
+
+    while (1)
     {
-        while ((user_f = readdir(user_d)) != NULL)
+        printf("\nVarrendo arquivos locais... FAVOR NAO REALIZAR NENHUM COMANDO\n");
+
+        //Faz a verificaçãao se algum arquivo foi movido ou deletado'
+        numRead = read(inotifyFd, buf, BUF_LEN);
+
+        for (p = buf; p < buf + numRead;)
         {
-            //Estrutura do arquivo sendo lido
-            struct file_info current_local_file;
-            if (user_f->d_name[0] != '.')
+
+            event = (struct inotify_event *)p;
+            //Verifica tipo de evento
+
+            if ( event->mask & IN_MOVED_FROM)
             {
-                // separa nome e extensao de arquivo
-                int file_name_i = 0;
-                // preenche nome do arquivo
-                while (user_f->d_name[file_name_i] != '.')
-                {
-                    current_local_file.name[file_name_i] = user_f->d_name[file_name_i];
-                    file_name_i++;
-                }
-                current_local_file.name[file_name_i] = '\0';
 
-                //printf("Verificando arquivo: %s\n", current_local_file.name);
-                file_name_i++;
-                //preenche extensao do arquivo
-                int file_extension_i = 0;
-                while (user_f->d_name[file_name_i] != '\0')
-                {
-                    current_local_file.extension[file_extension_i] = user_f->d_name[file_name_i];
-                    file_extension_i++;
-                    file_name_i++;
-                }
-                current_local_file.extension[file_extension_i] = '\0';
-                //Envia comando para sincronizar este arquivo
-                char sync_local_command[20];
-                strcpy(sync_local_command, "sync_local");
+                //Foi deletado ou movido. Avisar o servidor
+                printf("%s foi deletado ou movido\n", event->name);
 
-                //Envia o comando para iniciar sincronização
-                int datalen = strlen(sync_local_command);
+                //Envia o comando para deletar
+                char delete_command[20];
+                strcpy(delete_command, "delete_file");
+                int datalen = strlen(delete_command);
                 int tmp = htonl(datalen);
                 int n = write(sock, (char *)&tmp, sizeof(tmp));
                 if (n < 0)
                     error("ERROR writing to socket");
-                n = write(sock, sync_local_command, datalen);
+                n = write(sock, delete_command, datalen);
                 if (n < 0)
                     error("ERROR writing to socket");
 
-                struct stat attr;
-                // gera a string do path do arquivo
-                char path[MAXNAME * 2];
-                snprintf(path, sizeof(path), "%s/%s.%s", client_folder, current_local_file.name, current_local_file.extension);
-                //printf("\n\n\npath: %s\n\n\n", path);
-
-                //Envia nome do arquivo
-                datalen = strlen(current_local_file.name);
+                //Envia nome do arquivo para deletar
+                datalen = strlen(event->name);
                 tmp = htonl(datalen);
                 n = write(sock, (char *)&tmp, sizeof(tmp));
                 if (n < 0)
                     error("ERROR writing to socket");
-                n = write(sock, current_local_file.name, datalen);
+                n = write(sock, event->name, datalen);
                 if (n < 0)
                     error("ERROR writing to socket");
 
-                stat(path, &attr);
-                current_local_file.last_modified = attr.st_mtime;
-                //printf("\n\n\nLMINT: %i\n\n\n",current_local_file.last_modified);
-                //printf("\n\n\nLMSTRING: %s\n\n\n",current_local_file.last_modified);
-
-                // envia o last modified para o servidor
-                int lm = htonl(current_local_file.last_modified);
-                send(sock, &lm, sizeof(lm), 0);
-
-                char response[50];
-
-                //Aguardo resposta do servidor do que fazer
+                //Recebe confirmacao do servidor
+                char response[20];
                 int buflen;
                 n = read(sock, (char *)&buflen, sizeof(buflen));
                 if (n < 0)
@@ -310,96 +287,210 @@ void *read_local_files()
                     error("ERROR reading from socket");
                 response[n] = '\0';
                 //printf("Tamanho: %d Mensagem: %s\n", buflen, response);
-                //printf("Resposta do servidor: %s\n", response);
-                if (strcmp(response, "new_file") == 0)
+                if (strcmp(response, "done"))
                 {
-                    //printf("Arquivo não encontrado no servidor, sera enviado agora \n");
-                    //Envia arquivo especificado
-                    char file_name_with_extension[50];
-                    snprintf(file_name_with_extension, sizeof(file_name_with_extension), "sync_dir_%s/%s.%s", username, current_local_file.name, current_local_file.extension);
-                   // printf("Arquivo a ser enviado: ->%s<- \n", file_name_with_extension);
-                    FILE *fp;
-                    //printf("Verificando se arquivo existe: ->%s<- \n", file_name_with_extension);
-                    if ((fp = fopen(file_name_with_extension, "r")) == NULL)
-                    {
-                        //printf("Arquivo não encontrado\n");
-                    }
-                    else
-                    {
-                        //printf("Arquivo encontrado\n");
-
-                        int n = 0;
-                        char file_name[MAXNAME];
-                        snprintf(file_name, sizeof(file_name), "%s/%s.%s", username, current_local_file.name, current_local_file.extension);
-                        send_file(file_name, fp);
-                    }
+                    printf("Arquivo deletado com sucesso no servidor!\n");
                 }
-                if (strcmp(response, "updatelocal") == 0)
+            }
+
+            p += sizeof(struct inotify_event) + event->len;
+        }
+
+        // Agora varre arquivos locais para sincronizá-los
+        DIR *user_d;
+        struct dirent *user_f;
+        int read_size;
+        // Abre pasta do cliente
+        user_d = opendir(client_folder);
+        if (user_d)
+        {
+            while ((user_f = readdir(user_d)) != NULL)
+            {
+                //Estrutura do arquivo sendo lido
+                struct file_info current_local_file;
+                if (user_f->d_name[0] != '.')
                 {
-                    //printf("\nArquivo do servidor mais novo. Necessita atualizar a pasta do usuario\n");
-                    char file_name_with_extension[50];
-                    //Aguardo nome do arquivo
+                    // separa nome e extensao de arquivo
+                    int file_name_i = 0;
+                    // preenche nome do arquivo
+                    while (user_f->d_name[file_name_i] != '.')
+                    {
+                        current_local_file.name[file_name_i] = user_f->d_name[file_name_i];
+                        file_name_i++;
+                    }
+                    current_local_file.name[file_name_i] = '\0';
+
+                    //printf("Verificando arquivo: %s\n", current_local_file.name);
+                    file_name_i++;
+                    //preenche extensao do arquivo
+                    int file_extension_i = 0;
+                    while (user_f->d_name[file_name_i] != '\0')
+                    {
+                        current_local_file.extension[file_extension_i] = user_f->d_name[file_name_i];
+                        file_extension_i++;
+                        file_name_i++;
+                    }
+                    current_local_file.extension[file_extension_i] = '\0';
+                    //Envia comando para sincronizar este arquivo
+                    char sync_local_command[20];
+                    strcpy(sync_local_command, "sync_local");
+
+                    //Envia o comando para iniciar sincronização
+                    int datalen = strlen(sync_local_command);
+                    int tmp = htonl(datalen);
+                    int n = write(sock, (char *)&tmp, sizeof(tmp));
+                    if (n < 0)
+                        error("ERROR writing to socket");
+                    n = write(sock, sync_local_command, datalen);
+                    if (n < 0)
+                        error("ERROR writing to socket");
+
+                    struct stat attr;
+                    // gera a string do path do arquivo
+                    char path[MAXNAME * 2];
+                    snprintf(path, sizeof(path), "%s/%s.%s", client_folder, current_local_file.name, current_local_file.extension);
+                    //printf("\n\n\npath: %s\n\n\n", path);
+
+                    //Envia nome do arquivo
+                    datalen = strlen(current_local_file.name);
+                    tmp = htonl(datalen);
+                    n = write(sock, (char *)&tmp, sizeof(tmp));
+                    if (n < 0)
+                        error("ERROR writing to socket");
+                    n = write(sock, current_local_file.name, datalen);
+                    if (n < 0)
+                        error("ERROR writing to socket");
+
+                    stat(path, &attr);
+                    current_local_file.last_modified = attr.st_mtime;
+                    //printf("\n\n\nLMINT: %i\n\n\n",current_local_file.last_modified);
+                    //printf("\n\n\nLMSTRING: %s\n\n\n",current_local_file.last_modified);
+
+                    // envia o last modified para o servidor
+                    int lm = htonl(current_local_file.last_modified);
+                    send(sock, &lm, sizeof(lm), 0);
+
+                    char response[50];
+
+                    //Aguardo resposta do servidor do que fazer
                     int buflen;
                     n = read(sock, (char *)&buflen, sizeof(buflen));
                     if (n < 0)
                         error("ERROR reading from socket");
                     buflen = ntohl(buflen);
-                    n = read(sock, file_name_with_extension, buflen);
+                    n = read(sock, response, buflen);
                     if (n < 0)
                         error("ERROR reading from socket");
-                    file_name_with_extension[n] = '\0';
-                    //printf("Tamanho: %d Mensagem: %s\n", buflen, file_name_with_extension);
-                    get_file(file_name_with_extension);
-                }
-                else if (strcmp(response, "updateserver") == 0)
-                {
-                    //printf("\nArquivo do usuario mais novo. Necessita atualizar o servidor\n");
-                    char file_name_with_extension[50];
-                    snprintf(file_name_with_extension, sizeof(file_name_with_extension), "sync_dir_%s/%s.%s", username, current_local_file.name, current_local_file.extension);
-                    //printf("Arquivo a ser enviado: ->%s<- \n", file_name_with_extension);
-                    FILE *fp;
-                    //printf("Verificando se arquivo existe: ->%s<- \n", file_name_with_extension);
-                    if ((fp = fopen(file_name_with_extension, "r")) == NULL)
+                    response[n] = '\0';
+                    //printf("Tamanho: %d Mensagem: %s\n", buflen, response);
+                    //printf("Resposta do servidor: %s\n", response);
+                    if (strcmp(response, "new_file") == 0)
                     {
-                        //printf("Arquivo não encontrado\n");
-                    }
-                    else
-                    {
-                        //printf("Arquivo encontrado\n");
+                        //printf("Arquivo não encontrado no servidor, sera enviado agora \n");
+                        //Envia arquivo especificado
+                        char file_name_with_extension[50];
+                        snprintf(file_name_with_extension, sizeof(file_name_with_extension), "sync_dir_%s/%s.%s", username, current_local_file.name, current_local_file.extension);
+                        // printf("Arquivo a ser enviado: ->%s<- \n", file_name_with_extension);
+                        FILE *fp;
+                        //printf("Verificando se arquivo existe: ->%s<- \n", file_name_with_extension);
+                        if ((fp = fopen(file_name_with_extension, "r")) == NULL)
+                        {
+                            //printf("Arquivo não encontrado\n");
+                        }
+                        else
+                        {
+                            //printf("Arquivo encontrado\n");
 
-                        int n = 0;
-                        char file_name[MAXNAME];
-                        snprintf(file_name, sizeof(file_name), "%s/%s.%s", username, current_local_file.name, current_local_file.extension);
-                        send_file(file_name, fp);
+                            int n = 0;
+                            char file_name[MAXNAME];
+                            snprintf(file_name, sizeof(file_name), "%s/%s.%s", username, current_local_file.name, current_local_file.extension);
+                            send_file(file_name, fp);
+                        }
                     }
-                }
-                else if (strcmp(response, "iguais") == 0)
-                {
-                    //printf("Arquivo do usuario e do servidor sao iguais.\n");
+                    if (strcmp(response, "updatelocal") == 0)
+                    {
+                        //printf("\nArquivo do servidor mais novo. Necessita atualizar a pasta do usuario\n");
+                        char file_name_with_extension[50];
+                        //Aguardo nome do arquivo
+                        int buflen;
+                        n = read(sock, (char *)&buflen, sizeof(buflen));
+                        if (n < 0)
+                            error("ERROR reading from socket");
+                        buflen = ntohl(buflen);
+                        n = read(sock, file_name_with_extension, buflen);
+                        if (n < 0)
+                            error("ERROR reading from socket");
+                        file_name_with_extension[n] = '\0';
+                        //printf("Tamanho: %d Mensagem: %s\n", buflen, file_name_with_extension);
+                        get_file(file_name_with_extension);
+                    }
+                    else if (strcmp(response, "updateserver") == 0)
+                    {
+                        //printf("\nArquivo do usuario mais novo. Necessita atualizar o servidor\n");
+                        char file_name_with_extension[50];
+                        snprintf(file_name_with_extension, sizeof(file_name_with_extension), "sync_dir_%s/%s.%s", username, current_local_file.name, current_local_file.extension);
+                        //printf("Arquivo a ser enviado: ->%s<- \n", file_name_with_extension);
+                        FILE *fp;
+                        //printf("Verificando se arquivo existe: ->%s<- \n", file_name_with_extension);
+                        if ((fp = fopen(file_name_with_extension, "r")) == NULL)
+                        {
+                            //printf("Arquivo não encontrado\n");
+                        }
+                        else
+                        {
+                            //printf("Arquivo encontrado\n");
+
+                            int n = 0;
+                            char file_name[MAXNAME];
+                            snprintf(file_name, sizeof(file_name), "%s/%s.%s",
+                                     username, current_local_file.name, current_local_file.extension);
+                            send_file(file_name, fp);
+                        }
+                    }
+                    else if (strcmp(response, "iguais") == 0)
+                    {
+                        //printf("Arquivo do usuario e do servidor sao iguais.\n");
+                    }
+                    else if (strcmp(response, "delete_file") == 0)
+                    {
+                        //Deleta arquivo do usuário
+                        char path_with_file[50];
+                        snprintf(path_with_file, sizeof(path_with_file), "%s/%s.%s",
+                        client_folder, current_local_file.name, current_local_file.extension);
+
+                        int ret = remove(path_with_file);
+                        if (ret == 0)
+                        {
+                            printf("Arquivo deletado com sucesso!");
+                        }else
+                        {
+                            printf("Erro ao deletar arquivo");
+                        }
+                    }
                 }
             }
         }
-    }
-    closedir(user_d);
-    ask_for_server_files();
-    const char *CLEAR_SCREEN_ANSI = "\e[1;1H\e[2J";
-    write(STDOUT_FILENO, CLEAR_SCREEN_ANSI, 12);
-    printf("\nSincronização concluida \n\n");
-    
-    printf("\nOperações disponíveis: \n\n");
-    printf("\t>> upload <path/filename.ext> \n\n");
-    printf("\t>> download <filename.ext> \n\n");
-    printf("\t>> list \n \n");
-    printf("\t>> get_sync_dir \n \n");
-    printf("\t>> exit \n \n \n");
-    printf(">>");
-    fflush(stdout);
-    sleep(10);
+        closedir(user_d);
+        ask_for_server_files();
+        const char *CLEAR_SCREEN_ANSI = "\e[1;1H\e[2J";
+        write(STDOUT_FILENO, CLEAR_SCREEN_ANSI, 12);
+        printf("\nSincronização concluida \n\n");
+
+        printf("\nOperações disponíveis: \n\n");
+        printf("\t>> upload <path/filename.ext> \n\n");
+        printf("\t>> download <filename.ext> \n\n");
+        printf("\t>> list \n \n");
+        printf("\t>> get_sync_dir \n \n");
+        printf("\t>> exit \n \n \n");
+        printf(">>");
+        fflush(stdout);
+        sleep(10);
     }
 }
 
 void sync_client()
 {
+
     printf("\nSync...\n");
     snprintf(client_folder, sizeof(client_folder), "sync_dir_%s", username);
     printf("Verificando cliente %s\n", username);
@@ -416,12 +507,20 @@ void sync_client()
 
     printf("\nInicializando sincronização...\n");
     pthread_t sync_thread;
+    pthread_t notify_thread;
+    inotifyFd = inotify_init1(IN_NONBLOCK); /* Create inotify instance */
+    if (inotifyFd == -1)
+        printf("inotify_init");
+
+    wd = inotify_add_watch(inotifyFd, client_folder, IN_ALL_EVENTS);
+    if (wd == -1)
+        printf("inotify_add_watch");
+    printf("Watching %s using wd %d\n", client_folder, wd);
 
     if (pthread_create(&sync_thread, NULL, read_local_files, NULL) < 0)
     {
         perror("Falha ao criar a thread");
     }
-
 }
 
 void get_file(char *file)

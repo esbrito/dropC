@@ -210,6 +210,89 @@ void receive_file(char *file, int sock)
         error("ERROR writing to socket");
 }
 
+delete_file(char *file_to_delete, char *user_folder, int sock)
+{
+
+    node_t *cursor = head;
+    char path_with_file[50];
+    snprintf(path_with_file, sizeof(path_with_file), "%s/%s", user_folder, file_to_delete);
+    //Deleta arquivo
+    int ret = remove(path_with_file);
+    if (ret == 0)
+    {
+        printf("Arquivo deletado com sucesso!");
+
+        //Envia confirmação para o cliente
+        char done[20];
+        strcpy(done, "done");
+        int datalen = strlen(done);
+        int tmp = htonl(datalen);
+        int n = write(sock, (char *)&tmp, sizeof(tmp));
+        if (n < 0)
+            error("ERROR writing to socket");
+        n = write(sock, done, datalen);
+        if (n < 0)
+            error("ERROR writing to socket");
+
+        //Agora atualiza estrutura de dados
+
+        printf("Pasta do usuário >>%s<<\n", user_folder);
+        while (cursor != NULL)
+        {
+            printf("Nome do arquivo recebido %s\n", file_to_delete);
+            printf("Nome do cliente atual >>%s<<\n", cursor->cli->userid);
+
+            printf("userid: %s\n", cursor->cli->userid);
+            printf("userfolder: %s\n", user_folder);
+
+            if (strcmp(cursor->cli->userid, user_folder) == 0)
+            {
+
+                printf("Encontrou usuário: %s\n", user_folder);
+                //Encontrado o cliente varre os arquivos dele para verificar se existe dado arquivo
+                int file_i = 0;
+                int has_file = 0;
+                char file_name_with_extension[50];
+                while (file_i < MAXFILES && has_file == 0)
+                {
+                    snprintf(file_name_with_extension, sizeof(file_name_with_extension), "%s.%s",
+                             cursor->cli->f_info[file_i].name, cursor->cli->f_info[file_i].extension);
+                    printf("Arquivo %s comparando com %s", file_name_with_extension, file_to_delete);
+                    if (strcmp(file_name_with_extension, file_to_delete) == 0)
+                    {
+                        printf("Nome do arquivo do servidor: %s\n", cursor->cli->f_info[file_i].name);
+                        cursor->cli->f_info[file_i].is_deleted = 1;
+                        time(&cursor->cli->f_info[file_i].deleted_date);
+                        printf("Hora de deleção do arquivo: %s\n", ctime(&(cursor->cli->f_info[file_i].deleted_date)));
+                        break;
+                    }
+                    file_i++;
+                }
+                cursor = cursor->next;
+            }
+            else
+            {
+                cursor = cursor->next;
+            }
+        }
+    }
+    else
+    {
+        printf("Erro ao deletar arquivo");
+        //Envia confirmação para o cliente
+        char done[20];
+        strcpy(done, "done");
+        int datalen = strlen(done);
+        int tmp = htonl(datalen);
+        int n = write(sock, (char *)&tmp, sizeof(tmp));
+        if (n < 0)
+            error("ERROR writing to socket");
+        n = write(sock, done, datalen);
+        if (n < 0)
+            error("ERROR writing to socket");
+    }
+}
+
 void sync_server_files(char *user_folder, int sock)
 {
     sem_wait(&sync_semaphore);
@@ -371,7 +454,66 @@ void sync_client_local_files(char *user_folder, int sock)
                     has_file = 1;
                     printf("Verificando versão mais atual...\n");
                     char sync_local_command_reponse[20];
-                    if ((lm - cursor->cli->f_info[file_i].last_modified) < -5)
+                    if(cursor->cli->f_info[file_i].is_deleted == 1)
+                    {
+                        if((lm - cursor->cli->f_info[file_i].deleted_date) < 0)
+                        {
+                            //Arquivo de fato foi deletado depois da ultima atualização do arquivo do cliente
+                             char sync_local_command_reponse[20];
+
+                            strcpy(sync_local_command_reponse, "delete_file");
+
+                            //Envia apenas o comando avisando o que deve ser feito
+                            int datalen = strlen(sync_local_command_reponse);
+                            int tmp = htonl(datalen);
+                            n = write(sock, (char *)&tmp, sizeof(tmp));
+                            if (n < 0)
+                                error("ERROR writing to socket");
+                            n = write(sock, sync_local_command_reponse, datalen);
+                            if (n < 0)
+                                error("ERROR writing to socket");
+                        }
+                        else
+                        {
+                        // Usuário tem arquivo mais atual que quando o antigo foi deletado. Deve atualizar
+                        cursor->cli->f_info[file_i].is_deleted = 0;
+                        printf("Arquivo do usuário é mais novo \n");
+
+                        printf("Last modified cliente %s \n", ctime(&lm));
+                        printf("Delated date do servidor: %s \n", ctime(&(cursor->cli->f_info[file_i].deleted_date)));
+
+                        char sync_local_command_reponse[20];
+
+                        strcpy(sync_local_command_reponse, "updateserver");
+
+                        //Envia apenas o comando avisando o que deve ser feito
+                        int datalen = strlen(sync_local_command_reponse);
+                        int tmp = htonl(datalen);
+                        n = write(sock, (char *)&tmp, sizeof(tmp));
+                        if (n < 0)
+                            error("ERROR writing to socket");
+                        n = write(sock, sync_local_command_reponse, datalen);
+                        if (n < 0)
+                            error("ERROR writing to socket");
+
+                        cursor->cli->f_info[file_i].last_modified = lm; // TODO Foi feito a atribuição, as não sei se funciona (ATUALIZA COM O LAST MODIFIED MAIS RECENTE)
+                        char file_name[MAXNAME];
+
+                        //Aguardo nome do arquivo
+                        int buflen;
+                        int n = read(sock, (char *)&buflen, sizeof(buflen));
+                        if (n < 0)
+                            error("ERROR reading from socket");
+                        buflen = ntohl(buflen);
+                        n = read(sock, file_name, buflen);
+                        if (n < 0)
+                            error("ERROR reading from socket");
+                        file_name[n] = '\0';
+                        printf("Tamanho: %d Mensagem: %s\n", buflen, user_folder);
+                        receive_file(file_name, sock);
+                        }
+                    }
+                    else if ((lm - cursor->cli->f_info[file_i].last_modified) < -5)
                     { // se o arquivo do servidor for mais atual, com um espaco de 5 segundos
                         printf("Arquivo do servidor é mais novo \n");
 
@@ -512,7 +654,7 @@ void *connection_handler(void *socket_desc)
     int sock = *(int *)socket_desc;
     int read_size;
     char *message;
-    char command[10];
+    char command[20];
     char user_folder[50];
 
     //Aguarda recebimento de mensagem do cliente. A primeira mensagem é pra definir quem ele é.
@@ -578,6 +720,25 @@ void *connection_handler(void *socket_desc)
             printf("\n\n Comando List recebido \n\n");
 
             //Informa os arquivos salvos no servidor
+        }
+        else if (strcmp(command, "delete_file") == 0)
+        {
+            printf("\n\n Comando delete_file recebido \n\n");
+
+            char file_name[50];
+            //Aguardo nome do arquivo
+            buflen;
+            n = read(sock, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                error("ERROR reading from socket");
+            buflen = ntohl(buflen);
+            n = read(sock, file_name, buflen);
+            if (n < 0)
+                error("ERROR reading from socket");
+            file_name[n] = '\0';
+            printf("Tamanho: %d Mensagem: %s\n", buflen, file_name);
+
+            delete_file(file_name, user_folder, sock);
         }
         else
         {
