@@ -13,7 +13,7 @@
 
 
 #define MAXNAME 50
-#define MAXFILES 10
+#define MAXFILES 50
 
 struct file_info
 {

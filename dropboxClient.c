@@ -65,6 +65,7 @@ int main(int argc, char *argv[])
     char file_command_name[50];
     while (1)
     {
+
         printf(">>");
         fgets(message, 100, stdin);
         char *command = strdup(message);
@@ -91,7 +92,37 @@ int main(int argc, char *argv[])
                 error("ERROR writing to socket");
 
             word = strsep(&command, " \n");
+
+            char file[50];
+            char file_name[50];
+            char file_extension[50];
+
             printf("Arquivo a ser enviado: ->%s<- \n", word);
+            strcpy(file, word);
+
+            //Separa extensão do nome do arquivo
+            int file_name_i = 0;
+            // preenche nome do arquivo
+            while (file[file_name_i] != '.')
+            {
+                file_name[file_name_i] = file[file_name_i];
+                file_name_i++;
+            }
+            file_name[file_name_i] = '\0';
+
+            printf("Nome do arquivo: %s\n", file_name);
+            file_name_i++;
+            //preenche extensao do arquivo
+            int file_extension_i = 0;
+            while (file[file_name_i] != '\0')
+            {
+                file_extension[file_extension_i] = file[file_name_i];
+                file_extension_i++;
+                file_name_i++;
+            }
+            file_extension[file_extension_i] = '\0';
+            printf("Extensão do arquivo: %s\n", file_extension);
+
             //Envia arquivo especificado
             FILE *fp;
             printf("Verificando se arquivo existe: ->%s<- \n", word);
@@ -104,10 +135,23 @@ int main(int argc, char *argv[])
             {
                 printf("\nArquivo encontrado\n");
 
-                int n = 0;
-                char file_name[50];
-                snprintf(file_name, sizeof(file_name), "%s/%s", username, word);
-                send_file(file_name, fp);
+                //Envia last modified do arquivo
+                struct stat attr;
+                stat(word, &attr);
+                time_t last_modified = attr.st_mtime;
+                int lm = htonl(last_modified);
+
+                datalen = sizeof(lm);
+                tmp = htonl(datalen);
+                n = write(sock, (char *)&tmp, sizeof(tmp));
+                if (n < 0)
+                    error("ERROR writing to socket");
+                n = write(sock, &lm, datalen);
+                if (n < 0)
+                    error("ERROR writing to socket");
+
+
+                send_file(file_name, file_extension, fp);
             }
         }
 
@@ -247,7 +291,7 @@ void *read_local_files()
             event = (struct inotify_event *)p;
             //Verifica tipo de evento
 
-            if ( event->mask & IN_MOVED_FROM)
+            if (event->mask & IN_MOVED_FROM)
             {
 
                 //Foi deletado ou movido. Avisar o servidor
@@ -401,10 +445,7 @@ void *read_local_files()
                         {
                             //printf("Arquivo encontrado\n");
 
-                            int n = 0;
-                            char file_name[MAXNAME];
-                            snprintf(file_name, sizeof(file_name), "%s/%s.%s", username, current_local_file.name, current_local_file.extension);
-                            send_file(file_name, fp);
+                            send_file(current_local_file.name, current_local_file.extension, fp);
                         }
                     }
                     if (strcmp(response, "updatelocal") == 0)
@@ -428,7 +469,8 @@ void *read_local_files()
                     {
                         //printf("\nArquivo do usuario mais novo. Necessita atualizar o servidor\n");
                         char file_name_with_extension[50];
-                        snprintf(file_name_with_extension, sizeof(file_name_with_extension), "sync_dir_%s/%s.%s", username, current_local_file.name, current_local_file.extension);
+                        snprintf(file_name_with_extension, sizeof(file_name_with_extension), "sync_dir_%s/%s.%s", 
+                        username, current_local_file.name, current_local_file.extension);
                         //printf("Arquivo a ser enviado: ->%s<- \n", file_name_with_extension);
                         FILE *fp;
                         //printf("Verificando se arquivo existe: ->%s<- \n", file_name_with_extension);
@@ -440,11 +482,7 @@ void *read_local_files()
                         {
                             //printf("Arquivo encontrado\n");
 
-                            int n = 0;
-                            char file_name[MAXNAME];
-                            snprintf(file_name, sizeof(file_name), "%s/%s.%s",
-                                     username, current_local_file.name, current_local_file.extension);
-                            send_file(file_name, fp);
+                            send_file(current_local_file.name, current_local_file.extension, fp);
                         }
                     }
                     else if (strcmp(response, "iguais") == 0)
@@ -456,13 +494,14 @@ void *read_local_files()
                         //Deleta arquivo do usuário
                         char path_with_file[50];
                         snprintf(path_with_file, sizeof(path_with_file), "%s/%s.%s",
-                        client_folder, current_local_file.name, current_local_file.extension);
+                                 client_folder, current_local_file.name, current_local_file.extension);
 
                         int ret = remove(path_with_file);
                         if (ret == 0)
                         {
                             printf("Arquivo deletado com sucesso!");
-                        }else
+                        }
+                        else
                         {
                             printf("Erro ao deletar arquivo");
                         }
@@ -484,7 +523,7 @@ void *read_local_files()
         printf("\t>> exit \n \n \n");
         printf(">>");
         fflush(stdout);
-        sleep(10);
+        sleep(15);
     }
 }
 
@@ -565,32 +604,45 @@ void get_file(char *file)
         error("ERROR writing to socket");
 }
 
-void send_file(char *file, FILE *fp)
+void send_file(char *file_name, char *file_extension, FILE *fp)
 {
 
-    //Envia o nome do arquivo já com o path da pasta do servidor para facilitar. Ex. eduardo/arquivo.txt
-    int datalen = strlen(file);
+    //Envia o nome do arquivo
+    //printf("Enviando arquivo %s", file_name);
+    int datalen = strlen(file_name);
     int tmp = htonl(datalen);
     int n = write(sock, (char *)&tmp, sizeof(tmp));
     if (n < 0)
         error("ERROR writing to socket");
-    n = write(sock, file, datalen);
+    n = write(sock, file_name, datalen);
     if (n < 0)
         error("ERROR writing to socket");
 
-    //printf("Enviando arquivo...\n");
+    //printf("Enviando extensao %s", file_extension);
+
+    //Envia a extensão do arquivo
+    datalen = strlen(file_extension);
+    tmp = htonl(datalen);
+    n = write(sock, (char *)&tmp, sizeof(tmp));
+    if (n < 0)
+        error("ERROR writing to socket");
+    n = write(sock, file_extension, datalen);
+    if (n < 0)
+        error("ERROR writing to socket");
+
+    printf("Enviando arquivo...\n");
     char file_buffer[1000];
     char f_buffer[1000];
     while (!feof(fp)) //até acabar o arquivo
     {
-        //printf("Lendo arquivo...\n");
+        printf("Lendo arquivo...\n");
         fgets(f_buffer, 1000, fp); //extrai 1000 chars do arquivo
         if (feof(fp))
             break;
         strcat(file_buffer, f_buffer);
     }
     strcat(file_buffer, f_buffer);
-    //printf("Enviando arquivo para o servidor....\n");
+    printf("Enviando arquivo para o servidor....\n");
     fclose(fp);
 
     //Enviando de fato arquivo
@@ -603,9 +655,11 @@ void send_file(char *file, FILE *fp)
     if (n < 0)
         error("ERROR writing to socket");
 
+    //Limpa buffers
     memset(file_buffer, 0, sizeof(file_buffer));
     memset(f_buffer, 0, sizeof(f_buffer));
 
+    //Aguarda resposta de recebimento completo do arquivo no servidor
     char response[20];
     int buflen;
     n = read(sock, (char *)&buflen, sizeof(buflen));
