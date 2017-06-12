@@ -7,5 +7,3 @@ gcc -pthread  -o server dropboxServer.c
 Executa o servidor sem parametros, só com ./server
 
 Cliente executa conforme especificado no trabalho, passando user, ip e porta. Ex: ./client eduardo 127.0.0.1 8888
-
-Isso já vai criar as pastas conforme o nome do usuario, tanto no servidor quanto no cliente, caso não existirem ainda.
