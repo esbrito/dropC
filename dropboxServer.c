@@ -22,7 +22,7 @@ node_t *create_client_list(node_t *head);
 node_t *head;
 
 //Usado para apenas um sincronizar por vez
-sem_t updating, deleting;
+sem_t updating, deleting, creating;
 
 //Thread responsável pela conexão. Uma pra cada cliente conectado
 
@@ -30,6 +30,7 @@ int main(int argc, char *argv[])
 {
     sem_init(&updating, 0, 1);
     sem_init(&deleting, 0, 1);
+    sem_init(&creating, 0, 1);
 
     head = NULL;
     head = create_client_list(head);
@@ -86,16 +87,39 @@ int main(int argc, char *argv[])
     return 0;
 }
 
-void create_user_folder(char *user_folder)
+void create_user_folder_and_update_structure(char *user_folder)
 {
 
+    sem_wait(&creating);
     printf("\nVerificando existência da pasta %s\n", user_folder);
     struct stat st = {0};
     if (stat(user_folder, &st) == -1)
     {
         printf("\nNão existe! Criando pasta...\n");
         mkdir(user_folder, 0777);
+
+        //Atualiza a estrutura de dados dos cliente e seus arquivos
+        printf("Criando cliente >>%s<<\n", user_folder);
+        node_t *cursor = head;
+        client_t *cli = malloc(sizeof(client_t));
+
+        printf("Alocando cliente...\n");
+        //Um dos usuários está logado agora
+        cli->devices[0] = 1;
+        cli->devices[1] = 0;
+        strcpy(cli->userid, user_folder);
+
+        int x;
+        //Inicializa nomes de arquivos com vazio
+        for (x = 0; x < MAXFILES; x++)
+        {
+            strcpy(cli->f_info[x].name, "");
+        }
+        printf("Adicionando a lista...\n");
+        head = append(head, cli);
+        printf("Adicionado!...\n");
     }
+    sem_post(&creating);
 }
 
 void send_file(char *file, FILE *fp, int sock)
@@ -219,10 +243,10 @@ delete_file(char *file_to_delete, char *user_folder, int sock)
         int tmp = htonl(datalen);
         int n = write(sock, (char *)&tmp, sizeof(tmp));
         if (n < 0)
-            error("ERROR writing to socket");
+            printf("ERROR writing to socket");
         n = write(sock, done, datalen);
         if (n < 0)
-            error("ERROR writing to socket");
+            printf("ERROR writing to socket");
 
         //Agora atualiza estrutura de dados
 
@@ -276,13 +300,12 @@ delete_file(char *file_to_delete, char *user_folder, int sock)
         int tmp = htonl(datalen);
         int n = write(sock, (char *)&tmp, sizeof(tmp));
         if (n < 0)
-            error("ERROR writing to socket");
+            printf("ERROR writing to socket");
         n = write(sock, done, datalen);
         if (n < 0)
-            error("ERROR writing to socket");
+            printf("ERROR writing to socket");
     }
     sem_post(&deleting);
-
 }
 
 void sync_server_files(char *user_folder, int sock)
@@ -400,7 +423,7 @@ void update_structure(char *user_folder, char *file_name, char *file_extension, 
     while (cursor != NULL)
     {
         printf("Nome do arquivo recebido %s para verificar na estrutura\n", file_name);
-   
+
         if (strcmp(cursor->cli->userid, user_folder) == 0)
         {
 
@@ -470,13 +493,16 @@ void sync_client_local_files(char *user_folder, int sock)
     printf("Tamanho: %d Mensagem: %s\n", buflen, file_name);
 
     time_t lm;
-    // recebe o last modified
-    //NAO PRECISA RECEBER O TAMANHO ANTES JA QUE É UM VALOR INTEIRO E NAO STRING VARIAVEL
-    if ((read_size = recv(sock, &lm, sizeof(lm), 0)) < 0)
-    {
-        printf("Erro ao receber resposta\n");
-    }
+    //Recebe last modified
+    n = read(sock, (char *)&buflen, sizeof(buflen));
+    if (n < 0)
+        printf("ERROR reading from socket");
+    buflen = ntohl(buflen);
+    n = read(sock, &lm, buflen);
+    if (n < 0)
+        printf("ERROR reading from socket");
     lm = ntohl(lm);
+    printf("Tamanho: %d Mensagem: %s\n", buflen, ctime(&lm));
 
     printf("Pasta do usuário >>%s<<\n", user_folder);
     while (cursor != NULL)
@@ -517,10 +543,10 @@ void sync_client_local_files(char *user_folder, int sock)
                             int tmp = htonl(datalen);
                             n = write(sock, (char *)&tmp, sizeof(tmp));
                             if (n < 0)
-                                error("ERROR writing to socket");
+                                printf("ERROR writing to socket");
                             n = write(sock, sync_local_command_reponse, datalen);
                             if (n < 0)
-                                error("ERROR writing to socket");
+                                printf("ERROR writing to socket");
                         }
                         else
                         {
@@ -540,10 +566,10 @@ void sync_client_local_files(char *user_folder, int sock)
                             int tmp = htonl(datalen);
                             n = write(sock, (char *)&tmp, sizeof(tmp));
                             if (n < 0)
-                                error("ERROR writing to socket");
+                                printf("ERROR writing to socket");
                             n = write(sock, sync_local_command_reponse, datalen);
                             if (n < 0)
-                                error("ERROR writing to socket");
+                                printf("ERROR writing to socket");
 
                             cursor->cli->f_info[file_i].last_modified = lm; // TODO Foi feito a atribuição, as não sei se funciona (ATUALIZA COM O LAST MODIFIED MAIS RECENTE)
 
@@ -553,11 +579,11 @@ void sync_client_local_files(char *user_folder, int sock)
                             int buflen;
                             int n = read(sock, (char *)&buflen, sizeof(buflen));
                             if (n < 0)
-                                error("ERROR reading from socket");
+                                printf("ERROR reading from socket");
                             buflen = ntohl(buflen);
                             n = read(sock, file_name, buflen);
                             if (n < 0)
-                                error("ERROR reading from socket");
+                                printf("ERROR reading from socket");
                             file_name[n] = '\0';
                             printf("Tamanho: %d Mensagem: %s\n", buflen, file_name);
 
@@ -565,11 +591,11 @@ void sync_client_local_files(char *user_folder, int sock)
                             //Aguardo nome da extensão do arquivo
                             n = read(sock, (char *)&buflen, sizeof(buflen));
                             if (n < 0)
-                                error("ERROR reading from socket");
+                                printf("ERROR reading from socket");
                             buflen = ntohl(buflen);
                             n = read(sock, file_extension, buflen);
                             if (n < 0)
-                                error("ERROR reading from socket");
+                                printf("ERROR reading from socket");
                             file_extension[n] = '\0';
                             printf("Tamanho: %d Mensagem: %s\n", buflen, file_extension);
 
@@ -657,11 +683,11 @@ void sync_client_local_files(char *user_folder, int sock)
                         //Aguardo nome da extensão do arquivo
                         n = read(sock, (char *)&buflen, sizeof(buflen));
                         if (n < 0)
-                            error("ERROR reading from socket");
+                            printf("ERROR reading from socket");
                         buflen = ntohl(buflen);
                         n = read(sock, file_extension, buflen);
                         if (n < 0)
-                            error("ERROR reading from socket");
+                            printf("ERROR reading from socket");
                         file_extension[n] = '\0';
                         printf("Tamanho: %d Mensagem: %s\n", buflen, file_extension);
 
@@ -723,11 +749,11 @@ void sync_client_local_files(char *user_folder, int sock)
                 //Aguardo nome da extensão do arquivo
                 n = read(sock, (char *)&buflen, sizeof(buflen));
                 if (n < 0)
-                    error("ERROR reading from socket");
+                    printf("ERROR reading from socket");
                 buflen = ntohl(buflen);
                 n = read(sock, file_extension, buflen);
                 if (n < 0)
-                    error("ERROR reading from socket");
+                    printf("ERROR reading from socket");
                 file_extension[n] = '\0';
                 printf("Tamanho: %d Mensagem: %s\n", buflen, file_extension);
 
@@ -771,9 +797,8 @@ void *connection_handler(void *socket_desc)
     user_folder[n] = '\0';
     printf("Tamanho: %d Mensagem: %s\n", buflen, user_folder);
 
-    //TODO Verifica se já tem o máximo de usuarios logados com aquela conta
     //Cria pasta para usuário caso nao exista
-    create_user_folder(user_folder);
+    create_user_folder_and_update_structure(user_folder);
     printf("\n\n Pasta encontrada/criada com sucesso \n\n");
     //Aguarda comandos e os executa
     int command_size;
@@ -790,28 +815,57 @@ void *connection_handler(void *socket_desc)
         printf("\n\n Comando recebido >>%s<<\n\n", command);
         if (strcmp(command, "download") == 0)
         {
+            char file_name_with_extension[50];
+            //Aguardo nome do arquivo
+            buflen;
+            n = read(sock, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                printf("ERROR reading from socket");
+            buflen = ntohl(buflen);
+            n = read(sock, file_name_with_extension, buflen);
+            if (n < 0)
+                printf("ERROR reading from socket");
+            file_name_with_extension[n] = '\0';
+            printf("Tamanho: %d Mensagem: %s\n", buflen, file_name_with_extension);
+
+            FILE *fp;
+            char file_to_send[50];
+            char file_path[50];
+
+            snprintf(file_to_send, sizeof(file_to_send), "%s/%s", user_folder, file_name_with_extension);
+            snprintf(file_path, sizeof(file_path), "%s", file_name_with_extension);
+
+            printf("Verificando se arquivo existe: ->%s<- \n", file_name_with_extension);
+            if ((fp = fopen(file_to_send, "r")) == NULL)
+            {
+                printf("Arquivo não encontrado\n");
+            }
+            else
+            {
+                printf("\nArquivo encontrado\n");
+                send_file(file_path, fp, sock);
+            }
         }
         else if (strcmp(command, "upload") == 0)
         {
 
             printf("Preparando para receber arquivo...\n");
             time_t lm;
-            
 
+            //Recebe last modified
             n = read(sock, (char *)&buflen, sizeof(buflen));
             if (n < 0)
-                error("ERROR reading from socket");
+                printf("ERROR reading from socket");
             buflen = ntohl(buflen);
             n = read(sock, &lm, buflen);
             if (n < 0)
-                error("ERROR reading from socket");
+                printf("ERROR reading from socket");
             lm = ntohl(lm);
             printf("Tamanho: %d Mensagem: %s\n", buflen, ctime(&lm));
 
-            
-            printf("Data de modificação do arquivo %s\n",ctime(&lm));
+            printf("Data de modificação do arquivo %s\n", ctime(&lm));
             char file_name[MAXNAME];
-            
+
             //Aguardo nome do arquivo
             n = read(sock, (char *)&buflen, sizeof(buflen));
             if (n < 0)
@@ -827,11 +881,11 @@ void *connection_handler(void *socket_desc)
             //Aguardo nome da extensão do arquivo
             n = read(sock, (char *)&buflen, sizeof(buflen));
             if (n < 0)
-                error("ERROR reading from socket");
+                printf("ERROR reading from socket");
             buflen = ntohl(buflen);
             n = read(sock, file_extension, buflen);
             if (n < 0)
-                error("ERROR reading from socket");
+                printf("ERROR reading from socket");
             file_extension[n] = '\0';
             printf("Tamanho: %d Mensagem: %s\n", buflen, file_extension);
 
@@ -868,11 +922,11 @@ void *connection_handler(void *socket_desc)
             buflen;
             n = read(sock, (char *)&buflen, sizeof(buflen));
             if (n < 0)
-                error("ERROR reading from socket");
+                printf("ERROR reading from socket");
             buflen = ntohl(buflen);
             n = read(sock, file_name, buflen);
             if (n < 0)
-                error("ERROR reading from socket");
+                printf("ERROR reading from socket");
             file_name[n] = '\0';
             printf("Tamanho: %d Mensagem: %s\n", buflen, file_name);
 
@@ -899,17 +953,21 @@ void *connection_handler(void *socket_desc)
     return 0;
 }
 
-void list(char *user_folder, int sock) {
+void list(char *user_folder, int sock)
+{
     node_t *cursor = head;
     char str[1000];
     strcpy(str, " ");
-    while (cursor != NULL) {
+    while (cursor != NULL)
+    {
 
-        if (strcmp(cursor->cli->userid, user_folder) == 0) {
+        if (strcmp(cursor->cli->userid, user_folder) == 0)
+        {
             printf("Usuario encontrado, gerando lista de arquivos...\n");
 
-            int i=0;
-            while (cursor->cli->f_info[i].name[0] != '\0') {
+            int i = 0;
+            while (cursor->cli->f_info[i].name[0] != '\0' && cursor->cli->f_info[i].is_deleted == 0)
+            {
                 strcat(str, "Arquivo: ");
                 strcat(str, cursor->cli->f_info[i].name);
                 strcat(str, "  Extensao: .");
@@ -973,7 +1031,13 @@ int count(node_t *head)
 node_t *append(node_t *head, client_t *cli)
 {
     //vai ate o ultimo nodo
+    if(head == NULL)
+    {
+      head = prepend(head, cli);
+      return head;
+    }
     node_t *cursor = head;
+
     while (cursor->next != NULL)
     {
         cursor = cursor->next;
