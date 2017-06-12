@@ -547,6 +547,36 @@ void *connection_handler(void *socket_desc)
         printf("\n\n Comando recebido >>%s<<\n\n", command);
         if (strcmp(command, "download") == 0)
         {
+            char file_name_with_extension[50];
+            //Aguardo nome do arquivo
+            buflen;
+            n = read(sock, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                printf("ERROR reading from socket");
+            buflen = ntohl(buflen);
+            n = read(sock, file_name_with_extension, buflen);
+            if (n < 0)
+                printf("ERROR reading from socket");
+            file_name_with_extension[n] = '\0';
+            printf("Tamanho: %d Mensagem: %s\n", buflen, file_name_with_extension);
+
+            FILE *fp;
+            char file_to_send[50];
+            char file_path[50];
+
+            snprintf(file_to_send, sizeof(file_to_send), "%s/%s", user_folder, file_name_with_extension);
+            snprintf(file_path, sizeof(file_path), "%s/%s", user_folder, file_name_with_extension);
+
+            printf("Verificando se arquivo existe: ->%s<- \n", file_name_with_extension);
+            if ((fp = fopen(file_to_send, "r")) == NULL)
+            {
+                printf("Arquivo não encontrado\n");
+            }
+            else
+            {
+                printf("\nArquivo encontrado\n");
+                send_file(file_path, fp, sock);
+            }
         }
         else if (strcmp(command, "upload") == 0)
         {
