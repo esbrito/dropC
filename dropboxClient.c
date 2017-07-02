@@ -9,6 +9,11 @@
 #include <pthread.h>
 #include <sys/inotify.h>
 #include <limits.h>
+#include <openssl/crypto.h>
+#include <openssl/x509.h>
+#include <openssl/pem.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 
 #define BUF_LEN (10 * (sizeof(struct inotify_event) + NAME_MAX + 1))
 
@@ -21,9 +26,25 @@ char buf[BUF_LEN] __attribute__((aligned(8)));
 ssize_t numRead;
 char *p;
 struct inotify_event *event;
+//Variaveis para SSL
+SSL *ssl;
+SSL_METHOD *method;
+SSL_CTX *ctx;
 
 int main(int argc, char *argv[])
 {
+
+    //Configurações para SSL
+    OpenSSL_add_ssl_algorithms();
+    SSL_load_error_strings();
+    method = SSLv23_client_method();
+    ctx = SSL_CTX_new(method);
+    if (ctx == NULL)
+    {
+        ERR_print_errors_fp(stderr);
+        abort();
+    }
+
     int port;
     char *userId = argv[1];
     char *ip = argv[2];
@@ -40,27 +61,29 @@ int main(int argc, char *argv[])
     if (connect_server(ip, port) == 1)
     {
         printf("Erro ao conectar com o servidor");
+        fflush(stdout);
+        exit(1);
     }
 
     //Envia qual usuario que logou
     strcpy(username, userId);
     int datalen = strlen(username);
     int tmp = htonl(datalen);
-    n = write(sock, (char *)&tmp, sizeof(tmp));
+    n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
     if (n < 0)
         printf("Erro ao escrever no socket");
-    n = write(sock, username, datalen);
+    n = SSL_write(ssl, username, datalen);
     if (n < 0)
         printf("Erro ao escrever no socket");
 
     //Aguarda resposta do servidor se de fato logou
     char ok_to_connect[10];
     int buflen;
-    n = read(sock, (char *)&buflen, sizeof(buflen));
+    n = SSL_read(ssl, (char *)&buflen, sizeof(buflen));
     if (n < 0)
         printf("Erro ao ler do socket");
     buflen = ntohl(buflen);
-    n = read(sock, ok_to_connect, buflen);
+    n = SSL_read(ssl, ok_to_connect, buflen);
     if (n < 0)
         printf("Erro ao ler do socket");
     ok_to_connect[n] = '\0';
@@ -109,10 +132,10 @@ int main(int argc, char *argv[])
             //Envia o comando
             int datalen = strlen(download_command);
             int tmp = htonl(datalen);
-            int n = write(sock, (char *)&tmp, sizeof(tmp));
+            int n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
             if (n < 0)
                 printf("Erro ao escrever no socket");
-            n = write(sock, download_command, datalen);
+            n = SSL_write(ssl, download_command, datalen);
             if (n < 0)
                 printf("Erro ao escrever no socket");
 
@@ -122,10 +145,10 @@ int main(int argc, char *argv[])
             //Envia o nome do arquivo
             datalen = strlen(word);
             tmp = htonl(datalen);
-            n = write(sock, (char *)&tmp, sizeof(tmp));
+            n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
             if (n < 0)
                 printf("Erro ao escrever no socket");
-            n = write(sock, word, datalen);
+            n = SSL_write(ssl, word, datalen);
             if (n < 0)
                 printf("Erro ao escrever no socket");
 
@@ -133,11 +156,11 @@ int main(int argc, char *argv[])
 
             //Aguardo confirmação
             int buflen;
-            n = read(sock, (char *)&buflen, sizeof(buflen));
+            n = SSL_read(ssl, (char *)&buflen, sizeof(buflen));
             if (n < 0)
                 printf("Erro ao ler do socket");
             buflen = ntohl(buflen);
-            n = read(sock, file_name_with_extension, buflen);
+            n = SSL_read(ssl, file_name_with_extension, buflen);
             if (n < 0)
                 printf("Erro ao ler do socket");
             file_name_with_extension[n] = '\0';
@@ -158,20 +181,20 @@ int main(int argc, char *argv[])
             //Envia o comando para avisar que está deslogando
             int datalen = strlen(exit_command);
             tmp = htonl(datalen);
-            n = write(sock, (char *)&tmp, sizeof(tmp));
+            n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
             if (n < 0)
                 printf("Erro ao escrever no socket");
-            n = write(sock, exit_command, datalen);
+            n = SSL_write(ssl, exit_command, datalen);
             if (n < 0)
                 printf("Erro ao escrever no socket");
 
             //Envia nome do usuário que vai deslogar
             datalen = strlen(username);
             tmp = htonl(datalen);
-            n = write(sock, (char *)&tmp, sizeof(tmp));
+            n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
             if (n < 0)
                 printf("Erro ao escrever no socket");
-            n = write(sock, username, datalen);
+            n = SSL_write(ssl, username, datalen);
             if (n < 0)
                 printf("Erro ao escrever no socket");
 
@@ -228,10 +251,10 @@ int main(int argc, char *argv[])
                 //Envia o comando para iniciar o upload
                 int datalen = strlen(upload_command);
                 int tmp = htonl(datalen);
-                int n = write(sock, (char *)&tmp, sizeof(tmp));
+                int n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
                 if (n < 0)
                     printf("Erro ao escrever no socket");
-                n = write(sock, upload_command, datalen);
+                n = SSL_write(ssl, upload_command, datalen);
                 if (n < 0)
                     printf("Erro ao escrever no socket");
 
@@ -245,10 +268,10 @@ int main(int argc, char *argv[])
 
                 datalen = sizeof(lm);
                 tmp = htonl(datalen);
-                n = write(sock, (char *)&tmp, sizeof(tmp));
+                n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
                 if (n < 0)
                     printf("Erro ao escrever no socket");
-                n = write(sock, &lm, datalen);
+                n = SSL_write(ssl, &lm, datalen);
                 if (n < 0)
                     printf("Erro ao escrever no socket");
 
@@ -264,10 +287,10 @@ int main(int argc, char *argv[])
             //Envia comando
             int datalen = strlen(list_command);
             int tmp = htonl(datalen);
-            int n = write(sock, (char *)&tmp, sizeof(tmp));
+            int n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
             if (n < 0)
                 printf("Erro ao escrever no socket");
-            n = write(sock, list_command, datalen);
+            n = SSL_write(ssl, list_command, datalen);
             if (n < 0)
                 printf("Erro ao escrever no socket");
 
@@ -275,11 +298,11 @@ int main(int argc, char *argv[])
 
             //Aguarda a string contendo a lista
             int buflen;
-            n = read(sock, (char *)&buflen, sizeof(buflen));
+            n = SSL_read(ssl, (char *)&buflen, sizeof(buflen));
             if (n < 0)
                 printf("Erro ao ler do socket");
             buflen = ntohl(buflen);
-            n = read(sock, str, buflen);
+            n = SSL_read(ssl, str, buflen);
             if (n < 0)
                 printf("Erro ao ler do socket");
             str[n] = '\0';
@@ -306,13 +329,28 @@ int connect_server(char *host, int port)
         return 1;
     }
 
+    //Seta o socket para SSL
+
     server.sin_addr.s_addr = inet_addr(host);
     server.sin_family = AF_INET;
     server.sin_port = htons(port);
     //Conecta ao servidor
+   
     if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0)
     {
         return 1;
+    }
+
+    ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, sock);
+
+    if (SSL_connect(ssl) == -1)
+    {
+        return 1;
+    }
+    else
+    {
+        return 0;
     }
 }
 
@@ -325,10 +363,10 @@ void ask_for_server_files()
     //Envia o comando para iniciar sincronização
     int datalen = strlen(sync_server_command);
     int tmp = htonl(datalen);
-    int n = write(sock, (char *)&tmp, sizeof(tmp));
+    int n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
     if (n < 0)
         printf("Erro ao escrever no socket");
-    n = write(sock, sync_server_command, datalen);
+    n = SSL_write(ssl, sync_server_command, datalen);
     if (n < 0)
         printf("Erro ao escrever no socket");
 
@@ -338,11 +376,11 @@ void ask_for_server_files()
     {
         //Aguardo nome do arquivo
         int buflen;
-        n = read(sock, (char *)&buflen, sizeof(buflen));
+        n = SSL_read(ssl, (char *)&buflen, sizeof(buflen));
         if (n < 0)
             printf("Erro ao ler do socket");
         buflen = ntohl(buflen);
-        n = read(sock, file_name_with_extension, buflen);
+        n = SSL_read(ssl, file_name_with_extension, buflen);
         if (n < 0)
             printf("Erro ao ler do socket");
         file_name_with_extension[n] = '\0';
@@ -361,20 +399,20 @@ void ask_for_server_files()
             //Envia comando avisando para baixar arquivo pois nao existe no cliente só no servidor
             datalen = strlen(response);
             tmp = htonl(datalen);
-            n = write(sock, (char *)&tmp, sizeof(tmp));
+            n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
             if (n < 0)
                 printf("Erro ao escrever no socket");
-            n = write(sock, response, datalen);
+            n = SSL_write(ssl, response, datalen);
             if (n < 0)
                 printf("Erro ao escrever no socket");
 
             //Aguardo nome do arquivo
             int buflen;
-            n = read(sock, (char *)&buflen, sizeof(buflen));
+            n = SSL_read(ssl, (char *)&buflen, sizeof(buflen));
             if (n < 0)
                 printf("Erro ao ler do socket");
             buflen = ntohl(buflen);
-            n = read(sock, file_name_with_extension, buflen);
+            n = SSL_read(ssl, file_name_with_extension, buflen);
             if (n < 0)
                 printf("Erro ao ler do socket");
             file_name_with_extension[n] = '\0';
@@ -390,10 +428,10 @@ void ask_for_server_files()
             //Envia comando avisando para nao baixar arquivo pois existe no cliente
             datalen = strlen(response);
             tmp = htonl(datalen);
-            n = write(sock, (char *)&tmp, sizeof(tmp));
+            n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
             if (n < 0)
                 printf("Erro ao escrever no socket");
-            n = write(sock, response, datalen);
+            n = SSL_write(ssl, response, datalen);
             if (n < 0)
                 printf("Erro ao escrever no socket");
         }
@@ -426,31 +464,31 @@ void *read_local_files()
                 strcpy(delete_command, "delete_file");
                 int datalen = strlen(delete_command);
                 int tmp = htonl(datalen);
-                int n = write(sock, (char *)&tmp, sizeof(tmp));
+                int n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
                 if (n < 0)
                     printf("Erro ao escrever no socket");
-                n = write(sock, delete_command, datalen);
+                n = SSL_write(ssl, delete_command, datalen);
                 if (n < 0)
                     printf("Erro ao escrever no socket");
 
                 //Envia nome do arquivo para deletar
                 datalen = strlen(event->name);
                 tmp = htonl(datalen);
-                n = write(sock, (char *)&tmp, sizeof(tmp));
+                n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
                 if (n < 0)
                     printf("Erro ao escrever no socket");
-                n = write(sock, event->name, datalen);
+                n = SSL_write(ssl, event->name, datalen);
                 if (n < 0)
                     printf("Erro ao escrever no socket");
 
                 //Recebe confirmacao do servidor
                 char response[20];
                 int buflen;
-                n = read(sock, (char *)&buflen, sizeof(buflen));
+                n = SSL_read(ssl, (char *)&buflen, sizeof(buflen));
                 if (n < 0)
                     printf("Erro ao ler do socket");
                 buflen = ntohl(buflen);
-                n = read(sock, response, buflen);
+                n = SSL_read(ssl, response, buflen);
                 if (n < 0)
                     printf("Erro ao ler do socket");
                 response[n] = '\0';
@@ -505,10 +543,10 @@ void *read_local_files()
                     //Envia o comando para iniciar sincronização
                     int datalen = strlen(sync_local_command);
                     int tmp = htonl(datalen);
-                    int n = write(sock, (char *)&tmp, sizeof(tmp));
+                    int n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
                     if (n < 0)
                         printf("Erro ao escrever no socket");
-                    n = write(sock, sync_local_command, datalen);
+                    n = SSL_write(ssl, sync_local_command, datalen);
                     if (n < 0)
                         printf("Erro ao escrever no socket");
 
@@ -520,10 +558,10 @@ void *read_local_files()
                     //Envia nome do arquivo
                     datalen = strlen(current_local_file.name);
                     tmp = htonl(datalen);
-                    n = write(sock, (char *)&tmp, sizeof(tmp));
+                    n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
                     if (n < 0)
                         printf("Erro ao escrever no socket");
-                    n = write(sock, current_local_file.name, datalen);
+                    n = SSL_write(ssl, current_local_file.name, datalen);
                     if (n < 0)
                         printf("Erro ao escrever no socket");
 
@@ -534,10 +572,10 @@ void *read_local_files()
                     int lm = htonl(current_local_file.last_modified);
                     datalen = sizeof(lm);
                     tmp = htonl(datalen);
-                    n = write(sock, (char *)&tmp, sizeof(tmp));
+                    n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
                     if (n < 0)
                         printf("Erro ao escrever no socket");
-                    n = write(sock, &lm, datalen);
+                    n = SSL_write(ssl, &lm, datalen);
                     if (n < 0)
                         printf("Erro ao escrever no socket");
 
@@ -545,11 +583,11 @@ void *read_local_files()
 
                     //Aguardo resposta do servidor do que fazer
                     int buflen;
-                    n = read(sock, (char *)&buflen, sizeof(buflen));
+                    n = SSL_read(ssl, (char *)&buflen, sizeof(buflen));
                     if (n < 0)
                         printf("Erro ao ler do socket");
                     buflen = ntohl(buflen);
-                    n = read(sock, response, buflen);
+                    n = SSL_read(ssl, response, buflen);
                     if (n < 0)
                         printf("Erro ao ler do socket");
                     response[n] = '\0';
@@ -579,11 +617,11 @@ void *read_local_files()
                         char file_name_with_extension[50];
                         //Aguardo nome do arquivo
                         int buflen;
-                        n = read(sock, (char *)&buflen, sizeof(buflen));
+                        n = SSL_read(ssl, (char *)&buflen, sizeof(buflen));
                         if (n < 0)
                             printf("Erro ao ler do socket");
                         buflen = ntohl(buflen);
-                        n = read(sock, file_name_with_extension, buflen);
+                        n = SSL_read(ssl, file_name_with_extension, buflen);
                         if (n < 0)
                             printf("Erro ao ler do socket");
                         file_name_with_extension[n] = '\0';
@@ -705,11 +743,11 @@ void get_file(char *file)
 
     //Recebe arquivo
     int buflen;
-    n = read(sock, (char *)&buflen, sizeof(buflen));
+    n = SSL_read(ssl, (char *)&buflen, sizeof(buflen));
     if (n < 0)
         printf("Erro ao ler do socket");
     buflen = ntohl(buflen);
-    n = read(sock, file_buffer, buflen);
+    n = SSL_read(ssl, file_buffer, buflen);
     if (n < 0)
         printf("Erro ao ler do socket");
     file_buffer[n] = '\0';
@@ -730,10 +768,10 @@ void get_file(char *file)
     //Envia confirmacao de recebimento
     int datalen = strlen(response);
     int tmp = htonl(datalen);
-    n = write(sock, (char *)&tmp, sizeof(tmp));
+    n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
     if (n < 0)
         printf("Erro ao escrever no socket");
-    n = write(sock, response, datalen);
+    n = SSL_write(ssl, response, datalen);
     if (n < 0)
         printf("Erro ao escrever no socket");
 }
@@ -744,20 +782,20 @@ void send_file(char *file_name, char *file_extension, FILE *fp)
     //Envia o nome do arquivo
     int datalen = strlen(file_name);
     int tmp = htonl(datalen);
-    int n = write(sock, (char *)&tmp, sizeof(tmp));
+    int n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
     if (n < 0)
         printf("Erro ao escrever no socket");
-    n = write(sock, file_name, datalen);
+    n = SSL_write(ssl, file_name, datalen);
     if (n < 0)
         printf("Erro ao escrever no socket");
 
     //Envia a extensão do arquivo
     datalen = strlen(file_extension);
     tmp = htonl(datalen);
-    n = write(sock, (char *)&tmp, sizeof(tmp));
+    n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
     if (n < 0)
         printf("Erro ao escrever no socket");
-    n = write(sock, file_extension, datalen);
+    n = SSL_write(ssl, file_extension, datalen);
     if (n < 0)
         printf("Erro ao escrever no socket");
 
@@ -783,10 +821,10 @@ void send_file(char *file_name, char *file_extension, FILE *fp)
     //Enviando de fato arquivo
     datalen = strlen(file_buffer);
     tmp = htonl(datalen);
-    n = write(sock, (char *)&tmp, sizeof(tmp));
+    n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
     if (n < 0)
         printf("Erro ao escrever no socket");
-    n = write(sock, file_buffer, datalen);
+    n = SSL_write(ssl, file_buffer, datalen);
     if (n < 0)
         printf("Erro ao escrever no socket");
 
@@ -795,11 +833,11 @@ void send_file(char *file_name, char *file_extension, FILE *fp)
     //Aguarda resposta de recebimento completo do arquivo no servidor
     char response[20];
     int buflen;
-    n = read(sock, (char *)&buflen, sizeof(buflen));
+    n = SSL_read(ssl, (char *)&buflen, sizeof(buflen));
     if (n < 0)
         printf("Erro ao ler do socket");
     buflen = ntohl(buflen);
-    n = read(sock, response, buflen);
+    n = SSL_read(ssl, response, buflen);
     if (n < 0)
         printf("Erro ao ler do socket");
     response[n] = '\0';
