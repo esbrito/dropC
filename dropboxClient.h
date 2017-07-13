@@ -7,6 +7,6 @@
 #include <string.h>
 int connect_server(char *host, int port);
 void sync_client();
-void send_file(char *file, FILE *fp); 
+void send_file(char *file_name, char *file_extension , FILE *fp); 
 void get_file(char *file);
 void close_connection();

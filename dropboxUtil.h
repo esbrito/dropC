@@ -13,7 +13,7 @@
 
 
 #define MAXNAME 50
-#define MAXFILES 10
+#define MAXFILES 50
 
 struct file_info
 {
@@ -21,6 +21,8 @@ struct file_info
     char extension[MAXNAME];
     time_t last_modified;
     int size;
+    int is_deleted;
+    time_t deleted_date;
 };
 
 typedef struct client

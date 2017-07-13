@@ -7,10 +7,18 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <openssl/crypto.h>
+#include <openssl/x509.h>
+#include <openssl/pem.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+
+#define CERTF "CertFile.pem"
+#define KEYF "KeyFile.pem"
 
 //declaracoes das funcoes
 void *connection_handler(void *);
-void list(char *user_folder, int sock);
+void list(char *user_folder, SSL *sock);
 
 node_t *create(client_t *cli, node_t *next);
 node_t *prepend(node_t *head, client_t *cli);
@@ -18,39 +26,48 @@ int count(node_t *head);
 node_t *append(node_t *head, client_t *cli);
 node_t *create_client_list(node_t *head);
 
-//Terá que se protegido por mutex
 node_t *head;
 
-//Usado para apenas um sincronizar por vez
-sem_t sync_semaphore;
-
-//Thread responsável pela conexão. Uma pra cada cliente conectado
+//Usado para proteger o acesso a estrutura de dados compartilhada entre as threads
+sem_t updating, deleting, creating, logout;
 
 int main(int argc, char *argv[])
 {
-    sem_init(&sync_semaphore, 0, 1);
+
+    SSL_METHOD *method;
+    SSL_CTX *ctx;
+    OpenSSL_add_ssl_algorithms();
+    SSL_load_error_strings();
+    method = SSLv23_server_method();
+    ctx = SSL_CTX_new(method);
+    if (ctx == NULL)
+    {
+        ERR_print_errors_fp(stderr);
+        abort();
+    }
+    if (SSL_CTX_use_certificate_file(ctx, CERTF, SSL_FILETYPE_PEM) <= 0)
+    {
+        ERR_print_errors_fp(stderr);
+        exit(3);
+    }
+    if (SSL_CTX_use_PrivateKey_file(ctx, KEYF, SSL_FILETYPE_PEM) <= 0)
+    {
+        ERR_print_errors_fp(stderr);
+        exit(4);
+    }
+
+    //Inicializa semáforos como 1, fazendo eles funcionarem como mutex para garantir exclusão mútua
+    sem_init(&updating, 0, 1);
+    sem_init(&deleting, 0, 1);
+    sem_init(&creating, 0, 1);
+    sem_init(&logout, 0, 1);
 
     head = NULL;
     head = create_client_list(head);
 
-    /*
-    char uid[] = "eae";
-    struct file_info f;
-    int li = 1;
-    client_t* cli = NULL;
-    cli = malloc(sizeof(client_t));
-    cli->logged_in = 1;
-    head = prepend(head,cli);
-
-    cli = malloc(sizeof(client_t));
-    cli->logged_in = 3;
-    head = append(head,cli);
-    printf("valor do logged in: %d\n", head->cli->logged_in);
-    head = head->next;
-    printf("valor do logged in: %d", head->cli->logged_in);*/
-
-    int socket_desc, client_sock, c, *socket_new;
+    int socket_desc, client_sock, c;
     struct sockaddr_in server, client;
+    
 
     socket_desc = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_desc == -1)
@@ -64,7 +81,6 @@ int main(int argc, char *argv[])
 
     if (bind(socket_desc, (struct sockaddr *)&server, sizeof(server)) < 0)
     {
-        //print the error message
         printf("Falha ao fazer o bind");
         return 1;
     }
@@ -73,17 +89,19 @@ int main(int argc, char *argv[])
     {
         listen(socket_desc, 3);
 
-        //Accept and incoming connection
+        //Aguarda conexões
         puts("Aguardando conexoes...");
         c = sizeof(struct sockaddr_in);
 
         client_sock = accept(socket_desc, (struct sockaddr *)&client, (socklen_t *)&c);
+   
         puts("Realizada conexao");
         pthread_t connection_client_thread;
-        socket_new = malloc(1);
-        *socket_new = client_sock;
-
-        if (pthread_create(&connection_client_thread, NULL, connection_handler, (void *)socket_new) < 0)
+        SSL *ssl_new;
+        ssl_new = SSL_new(ctx);
+        SSL_set_fd(ssl_new, client_sock);
+        SSL_accept (ssl_new); 
+        if (pthread_create(&connection_client_thread, NULL, connection_handler, ssl_new) < 0)
         {
             printf("Falha ao criar a thread");
             return 1;
@@ -101,67 +119,158 @@ int main(int argc, char *argv[])
     return 0;
 }
 
-void create_user_folder(char *user_folder)
+void create_user_folder_and_update_structure(char *user_folder, SSL *sock)
 {
 
-    printf("\nVerificando existência da pasta %s\n", user_folder);
+    sem_wait(&creating);
+    printf("Verificando existência da pasta %s\n", user_folder);
     struct stat st = {0};
     if (stat(user_folder, &st) == -1)
     {
-        printf("\nNão existe! Criando pasta...\n");
+        printf("Não existe! Criando pasta...\n");
         mkdir(user_folder, 0777);
+
+        //Atualiza a estrutura de dados dos cliente e seus arquivos
+        printf("Criando cliente >>%s<<\n", user_folder);
+        node_t *cursor = head;
+        client_t *cli = malloc(sizeof(client_t));
+
+        printf("Alocando cliente...\n");
+        //Um dos usuários está logado agora
+        cli->devices[0] = 1;
+        cli->devices[1] = 0;
+        strcpy(cli->userid, user_folder);
+
+        int x;
+        //Inicializa nomes de arquivos com vazio
+        for (x = 0; x < MAXFILES; x++)
+        {
+            strcpy(cli->f_info[x].name, "");
+        }
+        printf("Adicionando a lista...\n");
+        head = append(head, cli);
+        printf("Adicionado!...\n");
+
+        //Usuário autorizado
+        char response[10];
+        strcpy(response, "auth");
+        int datalen = strlen(response);
+        int tmp = htonl(datalen);
+        int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+        if (n < 0)
+            printf("Erro ao escrever no socket");
+        n = SSL_write(sock, response, datalen);
+        if (n < 0)
+            printf("Erro ao escrever no socket");
     }
+    else
+    {
+        //Usuário logou. Verificar se já está possui 2 logados
+        node_t *cursor = head;
+        //Atualiza a estrutura de dados dos cliente e seus arquivos
+        printf("Atualizando estrutura de arquivos do cliente >>%s<<\n", user_folder);
+        while (cursor != NULL)
+        {
+            if (strcmp(cursor->cli->userid, user_folder) == 0)
+            {
+
+                printf("Encontrou usuário para verificar login: %s\n", cursor->cli->userid);
+                if (cursor->cli->devices[0] == 1 && cursor->cli->devices[1] == 1)
+                {
+                    //Avisando que não está autorizado (já tem dois ativos)
+                    char response[10];
+                    strcpy(response, "un_auth");
+                    int datalen = strlen(response);
+                    int tmp = htonl(datalen);
+                    int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+                    if (n < 0)
+                        printf("Erro ao escrever no socket");
+                    n = SSL_write(sock, response, datalen);
+                    if (n < 0)
+                        printf("Erro ao escrever no socket");
+                }
+                else
+                {
+                    char response[10];
+                    strcpy(response, "auth");
+                    int datalen = strlen(response);
+                    int tmp = htonl(datalen);
+                    int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+                    if (n < 0)
+                        printf("Erro ao escrever no socket");
+                    n = SSL_write(sock, response, datalen);
+                    if (n < 0)
+                        printf("Erro ao escrever no socket");
+
+                    //Seta como logado um dos dispositivos
+                    if (cursor->cli->devices[0] == 0)
+                    {
+                        cursor->cli->devices[0] = 1;
+                    }
+                    else if (cursor->cli->devices[1] == 0)
+                    {
+                        cursor->cli->devices[1] = 1;
+                    }
+                }
+            }
+            cursor = cursor->next;
+        }
+    }
+    sem_post(&creating);
 }
 
-void send_file(char *file, FILE *fp, int sock)
+void send_file(char *file, FILE *fp, SSL *sock)
 {
 
     //Envia o nome do arquivo já com o path da pasta do servidor para facilitar. Ex. sync_dir_eduardo/arquivo.txt
     int datalen = strlen(file);
     int tmp = htonl(datalen);
-    int n = write(sock, (char *)&tmp, sizeof(tmp));
+    int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
     if (n < 0)
-        printf("ERROR writing to socket\n");
-    n = write(sock, file, datalen);
+        printf("Erro ao escrever no socket\n");
+    n = SSL_write(sock, file, datalen);
     if (n < 0)
-        printf("ERROR writing to socket\n");
+        printf("Erro ao escrever no socket\n");
 
-    char file_buffer[1000];
-    char f_buffer[1000];
-    while (!feof(fp)) //até acabar o arquivo
-    {
-        printf("Lendo arquivo...\n");
-        fgets(f_buffer, 1000, fp); //extrai 1000 chars do arquivo
-        if (feof(fp))
-            break;
-        strcat(file_buffer, f_buffer);
-    }
-    strcat(file_buffer, f_buffer);
-    printf("Enviando arquivo para o cliente....\n");
+    long lSize;
+    char *file_buffer;
+    fseek(fp, 0L, SEEK_END);
+    lSize = ftell(fp);
+    rewind(fp);
+
+    /* Aloca memória para todo o conteúdo */
+    file_buffer = calloc(1, lSize + 1);
+    if (!file_buffer)
+        fclose(fp), fputs("Erro ao alocar", stderr), exit(1);
+
+    /* Copia para buffer */
+    if (1 != fread(file_buffer, lSize, 1, fp))
+        fclose(fp), free(file_buffer), fputs("Erro na leitura", stderr), exit(1);
+
+    printf("Enviando arquivo para o servidor....\n");
     fclose(fp);
 
     //Enviando de fato arquivo
     datalen = strlen(file_buffer);
     tmp = htonl(datalen);
-    n = write(sock, (char *)&tmp, sizeof(tmp));
+    n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
     if (n < 0)
-        printf("ERROR writing to socket");
-    n = write(sock, file_buffer, datalen);
+        printf("Erro ao escrever no socket");
+    n = SSL_write(sock, file_buffer, datalen);
     if (n < 0)
-        printf("ERROR writing to socket");
+        printf("Erro ao escrever no socket");
 
-    memset(file_buffer, 0, sizeof(file_buffer));
-    memset(f_buffer, 0, sizeof(f_buffer));
+    free(file_buffer);
 
     char response[20];
     int buflen;
-    n = read(sock, (char *)&buflen, sizeof(buflen));
+    n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
     if (n < 0)
-        printf("ERROR reading from socket");
+        printf("Erro ao ler do socket");
     buflen = ntohl(buflen);
-    n = read(sock, response, buflen);
+    n = SSL_read(sock, response, buflen);
     if (n < 0)
-        printf("ERROR reading from socket");
+        printf("Erro ao ler do socket");
     response[n] = '\0';
     printf("Tamanho: %d Mensagem: %s\n", buflen, response);
     if (strcmp(response, "done"))
@@ -170,21 +279,23 @@ void send_file(char *file, FILE *fp, int sock)
     }
 }
 
-void receive_file(char *file, int sock)
+void receive_file(char *file, SSL *sock)
 {
-    char file_buffer[10000];
+    char file_buffer[100000];
     FILE *fp;
     int n;
 
+    printf("Recebendo arquivo em: %s\n", file);
+
     //Recebe arquivo
     int buflen;
-    n = read(sock, (char *)&buflen, sizeof(buflen));
+    n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
     if (n < 0)
-        printf("ERROR reading from socket");
+        printf("Erro ao ler do socket");
     buflen = ntohl(buflen);
-    n = read(sock, file_buffer, buflen);
+    n = SSL_read(sock, file_buffer, buflen);
     if (n < 0)
-        printf("ERROR reading from socket");
+        printf("Erro ao ler do socket");
     file_buffer[n] = '\0';
     printf("Tamanho: %d Mensagem: %s\n", buflen, file_buffer);
 
@@ -203,17 +314,102 @@ void receive_file(char *file, int sock)
     //Envia confirmacao de recebimento
     int datalen = strlen(response);
     int tmp = htonl(datalen);
-    n = write(sock, (char *)&tmp, sizeof(tmp));
+    n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
     if (n < 0)
-        printf("ERROR writing to socket");
-    n = write(sock, response, datalen);
+        printf("Erro ao escrever no socket");
+    n = SSL_write(sock, response, datalen);
     if (n < 0)
-        printf("ERROR writing to socket");
+        printf("Erro ao escrever no socket");
 }
 
-void sync_server_files(char *user_folder, int sock)
+delete_file(char *file_to_delete, char *user_folder, SSL *sock)
 {
-    sem_wait(&sync_semaphore);
+
+    sem_wait(&deleting);
+    printf("Deletando arquivo %s do servidor", file_to_delete);
+    node_t *cursor = head;
+    char path_with_file[50];
+    snprintf(path_with_file, sizeof(path_with_file), "%s/%s", user_folder, file_to_delete);
+    //Deleta arquivo
+    int ret = remove(path_with_file);
+    if (ret == 0)
+    {
+        printf("Arquivo deletado com sucesso!");
+
+        //Envia confirmação para o cliente
+        char done[20];
+        strcpy(done, "done");
+        int datalen = strlen(done);
+        int tmp = htonl(datalen);
+        int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+        if (n < 0)
+            printf("Erro ao escrever no socket");
+        n = SSL_write(sock, done, datalen);
+        if (n < 0)
+            printf("Erro ao escrever no socket");
+
+        //Agora atualiza estrutura de dados
+
+        printf("Pasta do usuário >>%s<<\n", user_folder);
+        while (cursor != NULL)
+        {
+            printf("Nome do arquivo recebido %s\n", file_to_delete);
+            printf("Nome do cliente atual >>%s<<\n", cursor->cli->userid);
+
+            printf("userid: %s\n", cursor->cli->userid);
+            printf("userfolder: %s\n", user_folder);
+
+            if (strcmp(cursor->cli->userid, user_folder) == 0)
+            {
+
+                printf("Encontrou usuário: %s\n", user_folder);
+                //Encontrado o cliente varre os arquivos dele para verificar se existe dado arquivo
+                int file_i = 0;
+                int has_file = 0;
+                char file_name_with_extension[50];
+                while (file_i < MAXFILES && has_file == 0)
+                {
+                    snprintf(file_name_with_extension, sizeof(file_name_with_extension), "%s.%s",
+                             cursor->cli->f_info[file_i].name, cursor->cli->f_info[file_i].extension);
+                    printf("Arquivo %s comparando com %s", file_name_with_extension, file_to_delete);
+                    if (strcmp(file_name_with_extension, file_to_delete) == 0)
+                    {
+                        printf("Nome do arquivo do servidor: %s\n", cursor->cli->f_info[file_i].name);
+                        cursor->cli->f_info[file_i].is_deleted = 1;
+                        time(&cursor->cli->f_info[file_i].deleted_date);
+                        printf("Hora de deleção do arquivo: %s\n", ctime(&(cursor->cli->f_info[file_i].deleted_date)));
+                        break;
+                    }
+                    file_i++;
+                }
+                cursor = cursor->next;
+            }
+            else
+            {
+                cursor = cursor->next;
+            }
+        }
+    }
+    else
+    {
+        printf("Erro ao deletar arquivo");
+        //Envia confirmação para o cliente
+        char done[20];
+        strcpy(done, "done");
+        int datalen = strlen(done);
+        int tmp = htonl(datalen);
+        int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+        if (n < 0)
+            printf("Erro ao escrever no socket");
+        n = SSL_write(sock, done, datalen);
+        if (n < 0)
+            printf("Erro ao escrever no socket");
+    }
+    sem_post(&deleting);
+}
+
+void sync_server_files(char *user_folder, SSL *sock)
+{
     DIR *user_d;
     struct dirent *user_f;
     int read_size;
@@ -255,24 +451,24 @@ void sync_server_files(char *user_folder, int sock)
                 //Envia nome do arquivo
                 int datalen = strlen(file_name);
                 int tmp = htonl(datalen);
-                int n = write(sock, (char *)&tmp, sizeof(tmp));
+                int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
                 if (n < 0)
-                    printf("ERROR writing to socket");
-                n = write(sock, file_name, datalen);
+                    printf("Erro ao escrever no socket");
+                n = SSL_write(sock, file_name, datalen);
                 if (n < 0)
-                    printf("ERROR writing to socket");
+                    printf("Erro ao escrever no socket");
 
                 char response[20];
 
                 //Aguardo confirmacao de que o arquivo nao existe no cliente
                 int buflen;
-                n = read(sock, (char *)&buflen, sizeof(buflen));
+                n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
                 if (n < 0)
-                    printf("ERROR reading from socket");
+                    printf("Erro ao ler do socket");
                 buflen = ntohl(buflen);
-                n = read(sock, response, buflen);
+                n = SSL_read(sock, response, buflen);
                 if (n < 0)
-                    printf("ERROR reading from socket");
+                    printf("Erro ao ler do socket");
                 response[n] = '\0';
                 printf("Tamanho: %d Mensagem: %s\n", buflen, response);
 
@@ -308,44 +504,105 @@ void sync_server_files(char *user_folder, int sock)
         strcpy(done, "server_done");
         int datalen = strlen(done);
         int tmp = htonl(datalen);
-        int n = write(sock, (char *)&tmp, sizeof(tmp));
+        int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
         if (n < 0)
-            printf("ERROR writing to socket");
-        n = write(sock, done, datalen);
+            printf("Erro ao escrever no socket");
+        n = SSL_write(sock, done, datalen);
         if (n < 0)
-            printf("ERROR writing to socket");
+            printf("Erro ao escrever no socket");
     }
     closedir(user_d);
-    sem_post(&sync_semaphore);
 }
 
-void sync_client_local_files(char *user_folder, int sock)
+void update_structure(char *user_folder, char *file_name, char *file_extension, time_t last_modfied)
 {
-    sem_wait(&sync_semaphore);
+    sem_wait(&updating);
+    node_t *cursor = head;
+    //Atualiza a estrutura de dados dos cliente e seus arquivos
+    printf("Atualizando estrutura de arquivos do cliente >>%s<<\n", user_folder);
+    while (cursor != NULL)
+    {
+        printf("Nome do arquivo recebido %s para verificar na estrutura\n", file_name);
+
+        if (strcmp(cursor->cli->userid, user_folder) == 0)
+        {
+
+            printf("Encontrou usuário para atualizar a estrutura: %s\n", cursor->cli->userid);
+            //Encontrado o cliente varre os arquivos dele para verificar se existe dado arquivo
+            int file_i = 0;
+            int has_file = 0;
+            char file_name_with_extension[50];
+            while (file_i < MAXFILES && has_file == 0)
+            {
+                snprintf(file_name_with_extension, sizeof(file_name_with_extension), "%s.%s",
+                         cursor->cli->f_info[file_i].name, cursor->cli->f_info[file_i].extension);
+                if (strcmp(file_name_with_extension, file_name) == 0)
+                {
+                    printf("Arquivo já existia no servidor. Atualizando dados da estrutura...\n");
+                    printf("Nome do arquivo do servidor: %s\n", cursor->cli->f_info[file_i].name);
+                    cursor->cli->f_info[file_i].last_modified = last_modfied; //Atualiza o valor do last modified
+                    printf("Novo horário de modificação: %s\n", ctime(&(cursor->cli->f_info[file_i].last_modified)));
+                    has_file = 1;
+                    break;
+                }
+                file_i++;
+            }
+            //Arquivo novo no servidor, necessita adicionar
+            if (has_file == 0)
+            {
+                printf("Arquivo é novo no servidor. Adicionar arquivo na estrutura\n");
+                int i = 0;
+                //Vai até a primeira posição livre do array
+                printf("Iniciando busca por primeira posição livre... %s", cursor->cli->f_info[i].name);
+                while (strcmp(cursor->cli->f_info[i].name, "") != 0)
+                {
+                    printf("Buscando primeira posição livre. Arquivo atual: %s", cursor->cli->f_info[i].name);
+                    i++;
+                }
+                //Adiciona arquivo no array
+                strcpy(cursor->cli->f_info[i].name, file_name);
+                strcpy(cursor->cli->f_info[i].extension, file_extension);
+                cursor->cli->f_info[i].last_modified = last_modfied;
+            }
+            cursor = cursor->next;
+        }
+        else
+        {
+            cursor = cursor->next;
+        }
+    }
+    sem_post(&updating);
+}
+
+void sync_client_local_files(char *user_folder, SSL *sock)
+{
     int read_size;
     node_t *cursor = head;
     char file_name[MAXNAME];
 
     //Aguardo nome do arquivo
     int buflen;
-    int n = read(sock, (char *)&buflen, sizeof(buflen));
+    int n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
     if (n < 0)
-        printf("ERROR reading from socket");
+        printf("Erro ao ler do socket");
     buflen = ntohl(buflen);
-    n = read(sock, file_name, buflen);
+    n = SSL_read(sock, file_name, buflen);
     if (n < 0)
-        printf("ERROR reading from socket");
+        printf("Erro ao ler do socket");
     file_name[n] = '\0';
     printf("Tamanho: %d Mensagem: %s\n", buflen, file_name);
 
     time_t lm;
-    // recebe o last modified
-    //NAO PRECISA RECEBER O TAMANHO ANTES JA QUE É UM VALOR INTEIRO E NAO STRING VARIAVEL
-    if ((read_size = recv(sock, &lm, sizeof(lm), 0)) < 0)
-    {
-        printf("Erro ao receber resposta\n");
-    }
+    //Recebe last modified
+    n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
+    if (n < 0)
+        printf("Erro ao ler do socket");
+    buflen = ntohl(buflen);
+    n = SSL_read(sock, &lm, buflen);
+    if (n < 0)
+        printf("Erro ao ler do socket");
     lm = ntohl(lm);
+    printf("Tamanho: %d Mensagem: %s\n", buflen, ctime(&lm));
 
     printf("Pasta do usuário >>%s<<\n", user_folder);
     while (cursor != NULL)
@@ -365,14 +622,90 @@ void sync_client_local_files(char *user_folder, int sock)
             int has_file = 0;
             while (file_i < MAXFILES && has_file == 0)
             {
-                //TODO Levar em conta a extensão do arquivo nessa comparação
                 if (strcmp(cursor->cli->f_info[file_i].name, file_name) == 0)
                 {
                     printf("Nome do arquivo do servidor: %s\n", cursor->cli->f_info[file_i].name);
                     has_file = 1;
                     printf("Verificando versão mais atual...\n");
                     char sync_local_command_reponse[20];
-                    if ((lm - cursor->cli->f_info[file_i].last_modified) < -5)
+                    if (cursor->cli->f_info[file_i].is_deleted == 1)
+                    {
+                        if ((lm - cursor->cli->f_info[file_i].deleted_date) < 0)
+                        {
+                            //Arquivo de fato foi deletado depois da ultima atualização do arquivo do cliente
+                            char sync_local_command_reponse[20];
+
+                            strcpy(sync_local_command_reponse, "delete_file");
+
+                            //Envia apenas o comando avisando o que deve ser feito
+                            int datalen = strlen(sync_local_command_reponse);
+                            int tmp = htonl(datalen);
+                            n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+                            if (n < 0)
+                                printf("Erro ao escrever no socket");
+                            n = SSL_write(sock, sync_local_command_reponse, datalen);
+                            if (n < 0)
+                                printf("Erro ao escrever no socket");
+                        }
+                        else
+                        {
+                            // Usuário tem arquivo mais atual que quando o antigo foi deletado. Deve atualizar
+                            cursor->cli->f_info[file_i].is_deleted = 0;
+                            printf("Arquivo do usuário é mais novo \n");
+
+                            printf("Last modified cliente %s \n", ctime(&lm));
+                            printf("Deleted date do servidor: %s \n", ctime(&(cursor->cli->f_info[file_i].deleted_date)));
+
+                            char sync_local_command_reponse[20];
+
+                            strcpy(sync_local_command_reponse, "updateserver");
+
+                            //Envia apenas o comando avisando o que deve ser feito
+                            int datalen = strlen(sync_local_command_reponse);
+                            int tmp = htonl(datalen);
+                            n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+                            if (n < 0)
+                                printf("Erro ao escrever no socket");
+                            n = SSL_write(sock, sync_local_command_reponse, datalen);
+                            if (n < 0)
+                                printf("Erro ao escrever no socket");
+
+                            cursor->cli->f_info[file_i].last_modified = lm;
+
+                            char file_name[MAXNAME];
+
+                            //Aguardo nome do arquivo
+                            int buflen;
+                            int n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
+                            if (n < 0)
+                                printf("Erro ao ler do socket");
+                            buflen = ntohl(buflen);
+                            n = SSL_read(sock, file_name, buflen);
+                            if (n < 0)
+                                printf("Erro ao ler do socket");
+                            file_name[n] = '\0';
+                            printf("Tamanho: %d Mensagem: %s\n", buflen, file_name);
+
+                            char file_extension[MAXNAME];
+                            //Aguardo nome da extensão do arquivo
+                            n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
+                            if (n < 0)
+                                printf("Erro ao ler do socket");
+                            buflen = ntohl(buflen);
+                            n = SSL_read(sock, file_extension, buflen);
+                            if (n < 0)
+                                printf("Erro ao ler do socket");
+                            file_extension[n] = '\0';
+                            printf("Tamanho: %d Mensagem: %s\n", buflen, file_extension);
+
+                            char file_name_with_extension_and_path[100];
+                            snprintf(file_name_with_extension_and_path, sizeof(file_name_with_extension_and_path), "%s/%s.%s",
+                                     user_folder, file_name, file_extension);
+                            receive_file(file_name_with_extension_and_path, sock);
+                            update_structure(user_folder, file_name, file_extension, lm);
+                        }
+                    }
+                    else if ((lm - cursor->cli->f_info[file_i].last_modified) < -5)
                     { // se o arquivo do servidor for mais atual, com um espaco de 5 segundos
                         printf("Arquivo do servidor é mais novo \n");
 
@@ -383,12 +716,12 @@ void sync_client_local_files(char *user_folder, int sock)
                         //Envia apenas o comando avisando o que deve ser feito
                         int datalen = strlen(sync_local_command_reponse);
                         int tmp = htonl(datalen);
-                        n = write(sock, (char *)&tmp, sizeof(tmp));
+                        n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
                         if (n < 0)
-                            printf("ERROR writing to socket");
-                        n = write(sock, sync_local_command_reponse, datalen);
+                            printf("Erro ao escrever no socket");
+                        n = SSL_write(sock, sync_local_command_reponse, datalen);
                         if (n < 0)
-                            printf("ERROR writing to socket");
+                            printf("Erro ao escrever no socket");
 
                         FILE *fp;
                         char file_to_send[50];
@@ -422,28 +755,46 @@ void sync_client_local_files(char *user_folder, int sock)
                         //Envia apenas o comando avisando o que deve ser feito
                         int datalen = strlen(sync_local_command_reponse);
                         int tmp = htonl(datalen);
-                        n = write(sock, (char *)&tmp, sizeof(tmp));
+                        n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
                         if (n < 0)
-                            printf("ERROR writing to socket");
-                        n = write(sock, sync_local_command_reponse, datalen);
+                            printf("Erro ao escrever no socket");
+                        n = SSL_write(sock, sync_local_command_reponse, datalen);
                         if (n < 0)
-                            printf("ERROR writing to socket");
+                            printf("Erro ao escrever no socket");
 
-                        cursor->cli->f_info[file_i].last_modified = lm; // TODO Foi feito a atribuição, as não sei se funciona (ATUALIZA COM O LAST MODIFIED MAIS RECENTE)
+                        cursor->cli->f_info[file_i].last_modified = lm;
+
                         char file_name[MAXNAME];
 
                         //Aguardo nome do arquivo
                         int buflen;
-                        int n = read(sock, (char *)&buflen, sizeof(buflen));
+                        int n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
                         if (n < 0)
-                            printf("ERROR reading from socket");
+                            printf("Erro ao ler do socket");
                         buflen = ntohl(buflen);
-                        n = read(sock, file_name, buflen);
+                        n = SSL_read(sock, file_name, buflen);
                         if (n < 0)
-                            printf("ERROR reading from socket");
+                            printf("Erro ao ler do socket");
                         file_name[n] = '\0';
-                        printf("Tamanho: %d Mensagem: %s\n", buflen, user_folder);
-                        receive_file(file_name, sock);
+                        printf("Tamanho: %d Mensagem: %s\n", buflen, file_name);
+
+                        char file_extension[MAXNAME];
+                        //Aguardo nome da extensão do arquivo
+                        n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
+                        if (n < 0)
+                            printf("Erro ao ler do socket");
+                        buflen = ntohl(buflen);
+                        n = SSL_read(sock, file_extension, buflen);
+                        if (n < 0)
+                            printf("Erro ao ler do socket");
+                        file_extension[n] = '\0';
+                        printf("Tamanho: %d Mensagem: %s\n", buflen, file_extension);
+
+                        char file_name_with_extension_and_path[100];
+                        snprintf(file_name_with_extension_and_path, sizeof(file_name_with_extension_and_path), "%s/%s.%s",
+                                 user_folder, file_name, file_extension);
+                        receive_file(file_name_with_extension_and_path, sock);
+                        update_structure(user_folder, file_name, file_extension, lm);
                     }
                     else
                     {
@@ -452,12 +803,12 @@ void sync_client_local_files(char *user_folder, int sock)
                         //Envia apenas o comando avisando o que deve ser feito
                         int datalen = strlen(sync_local_command_reponse);
                         int tmp = htonl(datalen);
-                        n = write(sock, (char *)&tmp, sizeof(tmp));
+                        n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
                         if (n < 0)
-                            printf("ERROR writing to socket");
-                        n = write(sock, sync_local_command_reponse, datalen);
+                            printf("Erro ao escrever no socket");
+                        n = SSL_write(sock, sync_local_command_reponse, datalen);
                         if (n < 0)
-                            printf("ERROR writing to socket");
+                            printf("Erro ao escrever no socket");
                     }
                 }
                 file_i++;
@@ -472,26 +823,44 @@ void sync_client_local_files(char *user_folder, int sock)
                 //Envia apenas o comando avisando o que deve ser feito
                 int datalen = strlen(sync_local_command_reponse);
                 int tmp = htonl(datalen);
-                n = write(sock, (char *)&tmp, sizeof(tmp));
+                n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
                 if (n < 0)
-                    printf("ERROR writing to socket");
-                n = write(sock, sync_local_command_reponse, datalen);
+                    printf("Erro ao escrever no socket");
+                n = SSL_write(sock, sync_local_command_reponse, datalen);
                 if (n < 0)
-                    printf("ERROR writing to socket");
+                    printf("Erro ao escrever no socket");
 
                 char file_name[MAXNAME];
+
                 //Aguardo nome do arquivo
                 int buflen;
-                int n = read(sock, (char *)&buflen, sizeof(buflen));
+                int n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
                 if (n < 0)
-                    printf("ERROR reading from socket");
+                    printf("Erro ao ler do socket");
                 buflen = ntohl(buflen);
-                n = read(sock, file_name, buflen);
+                n = SSL_read(sock, file_name, buflen);
                 if (n < 0)
-                    printf("ERROR reading from socket");
+                    printf("Erro ao ler do socket");
                 file_name[n] = '\0';
-                printf("Tamanho: %d Mensagem: %s\n", buflen, user_folder);
-                receive_file(file_name, sock);
+                printf("Tamanho: %d Mensagem: %s\n", buflen, file_name);
+
+                char file_extension[MAXNAME];
+                //Aguardo nome da extensão do arquivo
+                n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
+                if (n < 0)
+                    printf("Erro ao ler do socket");
+                buflen = ntohl(buflen);
+                n = SSL_read(sock, file_extension, buflen);
+                if (n < 0)
+                    printf("Erro ao ler do socket");
+                file_extension[n] = '\0';
+                printf("Tamanho: %d Mensagem: %s\n", buflen, file_extension);
+
+                char file_name_with_extension_and_path[100];
+                snprintf(file_name_with_extension_and_path, sizeof(file_name_with_extension_and_path), "%s/%s.%s",
+                         user_folder, file_name, file_extension);
+                receive_file(file_name_with_extension_and_path, sock);
+                update_structure(user_folder, file_name, file_extension, lm);
             }
             break;
         }
@@ -500,7 +869,37 @@ void sync_client_local_files(char *user_folder, int sock)
             cursor = cursor->next;
         }
     }
-    sem_post(&sync_semaphore);
+}
+
+void logout_user(char *user_folder)
+{
+    sem_wait(&logout);
+    node_t *cursor = head;
+    //Atualiza a estrutura de dados dos cliente e seus arquivos
+    printf("Atualizando estrutura de arquivos do cliente >>%s<<\n", user_folder);
+    while (cursor != NULL)
+    {
+        if (strcmp(cursor->cli->userid, user_folder) == 0)
+        {
+
+            printf("Encontrou usuário para deslogar: %s\n", cursor->cli->userid);
+
+            //Seta como logado um dos dispositivos
+            if (cursor->cli->devices[0] == 1)
+            {
+                printf("Usuário %s deslogado!", cursor->cli->userid);
+                cursor->cli->devices[0] = 0;
+            }
+            else if (cursor->cli->devices[1] == 1)
+            {
+                printf("Usuário %s deslogado!", cursor->cli->userid);
+                cursor->cli->devices[1] = 0;
+            }
+            break;
+        }
+        cursor = cursor->next;
+    }
+    sem_post(&logout);
 }
 
 /*
@@ -510,7 +909,7 @@ void *connection_handler(void *socket_desc)
 {
     int number_of_files = 0;
     //Descritor do socket
-    int sock = *(int *)socket_desc;
+    SSL *sock = socket_desc;
     int read_size;
     char *message;
     char command[20];
@@ -518,45 +917,46 @@ void *connection_handler(void *socket_desc)
 
     //Aguarda recebimento de mensagem do cliente. A primeira mensagem é pra definir quem ele é.
     int buflen;
-    int n = read(sock, (char *)&buflen, sizeof(buflen));
+    int n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
     if (n < 0)
-        printf("ERROR reading from socket");
+        printf("Erro ao ler do socket");
     buflen = ntohl(buflen);
-    n = read(sock, user_folder, buflen);
+    n = SSL_read(sock, user_folder, buflen);
     if (n < 0)
-        printf("ERROR reading from socket");
+        printf("Erro ao ler do socket");
     user_folder[n] = '\0';
     printf("Tamanho: %d Mensagem: %s\n", buflen, user_folder);
 
-    //TODO Verifica se já tem o máximo de usuarios logados com aquela conta
     //Cria pasta para usuário caso nao exista
-    create_user_folder(user_folder);
+    create_user_folder_and_update_structure(user_folder, sock);
     printf("\n\n Pasta encontrada/criada com sucesso \n\n");
     //Aguarda comandos e os executa
     int command_size;
-    while (n = read(sock, (char *)&command_size, sizeof(command_size)) > 0)
+    while (n = SSL_read(sock, (char *)&command_size, sizeof(command_size)) > 0)
     {
         if (n < 0)
-            printf("ERROR reading from socket");
+            printf("Erro ao ler do socket");
         command_size = ntohl(command_size);
-        n = read(sock, command, command_size);
+        n = SSL_read(sock, command, command_size);
         if (n < 0)
-            printf("ERROR reading from socket");
+            printf("Erro ao ler do socket");
         command[n] = '\0';
         printf("Tamanho: %d Mensagem: %s\n", command_size, command);
         printf("\n\n Comando recebido >>%s<<\n\n", command);
+
+        //Seleciona de acordo com comando recebido
         if (strcmp(command, "download") == 0)
         {
             char file_name_with_extension[50];
             //Aguardo nome do arquivo
             buflen;
-            n = read(sock, (char *)&buflen, sizeof(buflen));
+            n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
             if (n < 0)
-                printf("ERROR reading from socket");
+                printf("Erro ao ler do socket");
             buflen = ntohl(buflen);
-            n = read(sock, file_name_with_extension, buflen);
+            n = SSL_read(sock, file_name_with_extension, buflen);
             if (n < 0)
-                printf("ERROR reading from socket");
+                printf("Erro ao ler do socket");
             file_name_with_extension[n] = '\0';
             printf("Tamanho: %d Mensagem: %s\n", buflen, file_name_with_extension);
 
@@ -565,7 +965,7 @@ void *connection_handler(void *socket_desc)
             char file_path[50];
 
             snprintf(file_to_send, sizeof(file_to_send), "%s/%s", user_folder, file_name_with_extension);
-            snprintf(file_path, sizeof(file_path), "%s/%s", user_folder, file_name_with_extension);
+            snprintf(file_path, sizeof(file_path), "%s", file_name_with_extension);
 
             printf("Verificando se arquivo existe: ->%s<- \n", file_name_with_extension);
             if ((fp = fopen(file_to_send, "r")) == NULL)
@@ -580,34 +980,108 @@ void *connection_handler(void *socket_desc)
         }
         else if (strcmp(command, "upload") == 0)
         {
-            char file_name[50];
-            //Aguardo nome do arquivo
-            buflen;
-            n = read(sock, (char *)&buflen, sizeof(buflen));
+
+            printf("Preparando para receber arquivo...\n");
+            time_t lm;
+
+            //Recebe last modified
+            n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
             if (n < 0)
-                printf("ERROR reading from socket");
+                printf("Erro ao ler do socket");
             buflen = ntohl(buflen);
-            n = read(sock, file_name, buflen);
+            n = SSL_read(sock, &lm, buflen);
             if (n < 0)
-                printf("ERROR reading from socket");
+                printf("Erro ao ler do socket");
+            lm = ntohl(lm);
+            printf("Tamanho: %d Mensagem: %s\n", buflen, ctime(&lm));
+
+            printf("Data de modificação do arquivo %s\n", ctime(&lm));
+            char file_name[MAXNAME];
+
+            //Aguardo nome do arquivo
+            n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            buflen = ntohl(buflen);
+            n = SSL_read(sock, file_name, buflen);
+            if (n < 0)
+                printf("Erro ao ler do socket");
             file_name[n] = '\0';
             printf("Tamanho: %d Mensagem: %s\n", buflen, file_name);
-            receive_file(file_name, sock);
+
+            char file_extension[MAXNAME];
+            //Aguardo nome da extensão do arquivo
+            n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            buflen = ntohl(buflen);
+            n = SSL_read(sock, file_extension, buflen);
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            file_extension[n] = '\0';
+            printf("Tamanho: %d Mensagem: %s\n", buflen, file_extension);
+
+            char file_name_with_extension_and_path[100];
+            snprintf(file_name_with_extension_and_path, sizeof(file_name_with_extension_and_path), "%s/%s.%s",
+                     user_folder, file_name, file_extension);
+            printf("Recebendo arquivo %s", file_name_with_extension_and_path);
+            receive_file(file_name_with_extension_and_path, sock);
+            update_structure(user_folder, file_name, file_extension, lm);
         }
         else if (strcmp(command, "sync_local") == 0)
         {
             printf("Iniciando sincronização...\n");
             sync_client_local_files(user_folder, sock);
+            printf("Sincronização finalizada...\n");
+        }
+        else if (strcmp(command, "exit") == 0)
+        {
+            char user[50];
+            printf("Usuário deslogando\n");
+            //Aguardo nome do usuário
+            buflen;
+            n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            buflen = ntohl(buflen);
+            n = SSL_read(sock, user, buflen);
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            user[n] = '\0';
+            printf("Tamanho: %d Mensagem: %s\n", buflen, user);
+
+            logout_user(user);
+            printf("Usuário %s deslogado\n", user);
         }
         else if (strcmp(command, "sync_server") == 0)
         {
             printf("Iniciando sincronização de arquivos somente existentes no servidor...\n");
             sync_server_files(user_folder, sock);
+            printf("Sincronização finalizada...\n");
         }
         else if (strcmp(command, "list") == 0)
         {
             printf("\n\n Comando List recebido \n\n");
             list(user_folder, sock);
+        }
+        else if (strcmp(command, "delete_file") == 0)
+        {
+            printf("\n\n Comando delete_file recebido \n\n");
+
+            char file_name[50];
+            //Aguardo nome do arquivo
+            buflen;
+            n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            buflen = ntohl(buflen);
+            n = SSL_read(sock, file_name, buflen);
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            file_name[n] = '\0';
+            printf("Tamanho: %d Mensagem: %s\n", buflen, file_name);
+
+            delete_file(file_name, user_folder, sock);
         }
         else
         {
@@ -630,17 +1104,21 @@ void *connection_handler(void *socket_desc)
     return 0;
 }
 
-void list(char *user_folder, int sock) {
+void list(char *user_folder, SSL *sock)
+{
     node_t *cursor = head;
     char str[1000];
     strcpy(str, " ");
-    while (cursor != NULL) {
+    while (cursor != NULL)
+    {
 
-        if (strcmp(cursor->cli->userid, user_folder) == 0) {
+        if (strcmp(cursor->cli->userid, user_folder) == 0)
+        {
             printf("Usuario encontrado, gerando lista de arquivos...\n");
 
-            int i=0;
-            while (cursor->cli->f_info[i].name[0] != '\0') {
+            int i = 0;
+            while (cursor->cli->f_info[i].name[0] != '\0' && cursor->cli->f_info[i].is_deleted == 0)
+            {
                 strcat(str, "Arquivo: ");
                 strcat(str, cursor->cli->f_info[i].name);
                 strcat(str, "  Extensao: .");
@@ -655,12 +1133,12 @@ void list(char *user_folder, int sock) {
     //Envia a str para o cliente
     int datalen = strlen(str);
     int tmp = htonl(datalen);
-    int n = write(sock, (char *)&tmp, sizeof(tmp));
+    int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
     if (n < 0)
-        printf("ERROR writing to socket");
-    n = write(sock, str, datalen);
+        printf("Erro ao escrever no socket");
+    n = SSL_write(sock, str, datalen);
     if (n < 0)
-        printf("ERROR writing to socket");
+        printf("Erro ao escrever no socket");
 
     printf("Lista foi gerada e enviada ao cliente.\n");
 }
@@ -688,14 +1166,6 @@ node_t *prepend(node_t *head, client_t *cli)
     return head;
 }
 
-/*(*callback) (node_t* data) traverse(node_t* head, callback f) {
-    node_t* cursor = head;
-    while (cursor != NULL) {
-        f(cursor);
-        cursor = cursor->next;
-    }
-}*/
-
 int count(node_t *head)
 {
     node_t *cursor = head;
@@ -712,7 +1182,13 @@ int count(node_t *head)
 node_t *append(node_t *head, client_t *cli)
 {
     //vai ate o ultimo nodo
+    if (head == NULL)
+    {
+        head = prepend(head, cli);
+        return head;
+    }
     node_t *cursor = head;
+
     while (cursor->next != NULL)
     {
         cursor = cursor->next;
@@ -748,6 +1224,14 @@ node_t *create_client_list(node_t *head)
                         cli->devices[0] = 0;
                         cli->devices[1] = 0;
                         strcpy(cli->userid, dir->d_name);
+
+                        int x;
+
+                        //Inicializa nomes com vazio
+                        for (x = 0; x < MAXFILES; x++)
+                        {
+                            strcpy(cli->f_info[x].name, "");
+                        }
 
                         DIR *user_d;
                         struct dirent *user_f;
