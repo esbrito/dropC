@@ -335,7 +335,7 @@ int connect_server(char *host, int port)
     server.sin_family = AF_INET;
     server.sin_port = htons(port);
     //Conecta ao servidor
-   
+
     if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0)
     {
         return 1;
@@ -761,13 +761,92 @@ void get_file(char *file)
     //Limpa buffer
     memset(file_buffer, 0, sizeof(file_buffer));
 
-    printf("\n\n Arquivo recebido \n\n");
     char response[50];
+
+    //Inicia Algoritmo de Cristian
+    printf("Iniciando Algoritmo de Cristian\n");
+
+    struct timeval t0,t1,time_server;
+    struct tm tm_server;
+    char time_buff[64], tmbuf[64], usec_buff[7];
+    bzero(response, 50);
+
+    strcpy(response, "getTimeServer");
+    gettimeofday(&t0,NULL);
+
+    //Envia request de pegar tempo do servidor
+    int datalen = strlen(response);
+    int tmp = htonl(datalen);
+    n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
+    if (n < 0)
+        printf("Erro ao escrever no socket");
+    n = SSL_write(ssl, response, datalen);
+    if (n < 0)
+        printf("Erro ao escrever no socket");
+
+    printf("Request enviado\n");
+
+    //Recebe o tempo do servidor
+    buflen = 0;
+    bzero(response, 50);
+    n = SSL_read(ssl, (char *)&buflen, sizeof(buflen));
+    if (n < 0)
+        printf("Erro ao ler do socket");
+    buflen = ntohl(buflen);
+    n = SSL_read(ssl, response, buflen);
+    if (n < 0)
+        printf("Erro ao ler do socket");
+
+    printf("Resposta do servidor recebida\n %s \n", response);
+
+    //Pegando T1
+    gettimeofday(&t1,NULL);
+    //Calculando a diferenca dos tempos
+    const long int diff_sec = t1.tv_sec - t0.tv_sec;
+    //Pega o delta dos microsegundos
+    const long int diff_usec = t1.tv_usec > t0.tv_usec ? t1.tv_usec - t0.tv_usec : t0.tv_usec - t1.tv_usec;
+    printf("T1 - t0 = sec %ld usec %d\n", diff_sec, diff_usec);
+
+    //Separando tempo de microsegundos
+    char *end;
+    char *dot = strchr(response, '.');
+    int usec_pos = (int)(dot - response);
+
+    strncpy(time_buff, response, usec_pos);
+    int server_usec = atoi(usec_buff);
+    int rounding_sec = (server_usec + diff_usec)/1000000;
+    const long  diff_time = (diff_sec + rounding_sec);
+
+    strncpy(usec_buff, dot+1, 6);
+    strptime(time_buff, "%Y-%m-%d %H:%M:%S", &tm_server);
+    tm_server.tm_sec += diff_time;
+    time_t current_time = mktime(&tm_server);
+
+    bzero(tmbuf,sizeof(tmbuf));
+    strftime(tmbuf, sizeof(tmbuf), "%Y-%m-%d %H:%M:%S",localtime(&current_time));
+    printf("HORA LOCAL %s\n", tmbuf);
+
+    //Alterando o dado do arquivo
+    struct stat attributes;
+    struct utimbuf new_time;
+
+    stat(file,&attributes);
+
+    new_time.actime = attributes.st_atime;
+    new_time.modtime = current_time;
+
+    if(utime(file, &new_time) < 0){
+      perror(file);
+      exit(1);
+    }
+
+    printf("\n\n Arquivo recebido \n\n");
+    bzero(response, 50);
     strcpy(response, "done");
 
     //Envia confirmacao de recebimento
-    int datalen = strlen(response);
-    int tmp = htonl(datalen);
+    datalen = strlen(response);
+    tmp = htonl(datalen);
     n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
     if (n < 0)
         printf("Erro ao escrever no socket");
