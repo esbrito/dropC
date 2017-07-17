@@ -14,6 +14,7 @@
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <signal.h>
 
 #define BUF_LEN (10 * (sizeof(struct inotify_event) + NAME_MAX + 1))
 
@@ -30,9 +31,310 @@ struct inotify_event *event;
 SSL *ssl;
 SSL_METHOD *method;
 SSL_CTX *ctx;
+char *userId;
+int backup_port_1, backup_port_2, backup_port_3;
+int port;
+char *backup_ip_1, *backup_ip_2, *backup_ip_3;
+char *ip;
+
+void switch_primary(int signum)
+{
+    signal(SIGPIPE, switch_primary);
+
+    printf("DEBUG: Erro no primário. Trocando servidor...\n");
+    fflush(stdout);
+    if (connect_server(backup_ip_1, backup_port_1) == 1)
+    {
+        printf("Erro ao conectar com o backup 1");
+        if (connect_server(backup_ip_2, backup_port_2) == 1)
+        {
+            printf("Erro ao conectar com o backup 2");
+            if (connect_server(ip, port) == 1)
+            {
+                printf("Erro ao conectar com o novamente com o primário. SERVICO INDISPONIVEL");
+                fflush(stdout);
+                exit(1);
+            }
+        }
+    }
+    fflush(stdout);
+    printf("DEBUG: Conectado com servidor alternativo... \n\n");
+    fflush(stdout);
+
+    //Envia qual usuario que logou
+    strcpy(username, userId);
+    int datalen = strlen(username);
+    int tmp = htonl(datalen);
+    int n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
+    if (n < 0)
+        printf("Erro ao escrever no socket");
+    n = SSL_write(ssl, username, datalen);
+    if (n < 0)
+        printf("Erro ao escrever no socket");
+
+    //Aguarda resposta do servidor se de fato logou
+    char ok_to_connect[10];
+    int buflen;
+    n = SSL_read(ssl, (char *)&buflen, sizeof(buflen));
+    if (n < 0)
+        printf("Erro ao ler do socket");
+    buflen = ntohl(buflen);
+    n = SSL_read(ssl, ok_to_connect, buflen);
+    if (n < 0)
+        printf("Erro ao ler do socket");
+    ok_to_connect[n] = '\0';
+
+    
+    puts("Conectado com servidor!");
+    printf("\nOperações disponíveis: \n\n");
+    printf("\t>> upload <path/filename.ext> \n\n");
+    printf("\t>> download <filename.ext> \n\n");
+    printf("\t>> list \n \n");
+    printf("\t>> get_sync_dir \n \n");
+    printf("\t>> exit \n \n \n");
+    char message[50];
+    char command[50];
+    char file_command_name[50];
+    while (1)
+    {
+
+        printf(">>");
+        fgets(message, 100, stdin);
+        char *command = strdup(message);
+
+        if (command[4] == 10)
+        { // Corrige espaço do strdup para que não seja necessário enviar "list " por exemplo
+            command[4] = '\0';
+        }
+        if (command[12] == 10)
+        { // Corrige espaço do strdup para que não seja necessário enviar "get_sync_dir " por exemplo
+            command[12] = '\0';
+        }
+
+        char *word = strsep(&command, " ");
+
+        //Verifica qual dos comandos foi solicitado pelo cliente
+        printf("\nComando digitado: %s\n", word);
+
+        if (strcmp(word, "download") == 0)
+        {
+            char download_command[20];
+            strcpy(download_command, "download");
+
+            //Envia o comando
+            int datalen = strlen(download_command);
+            int tmp = htonl(datalen);
+            int n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
+            if (n < 0)
+            {
+                printf("Erro ao escrever no socket");
+                switch_primary(n);
+            }
+            n = SSL_write(ssl, download_command, datalen);
+            if (n < 0)
+            {
+                printf("Erro ao escrever no socket");
+                switch_primary(n);
+            }
+
+            word = strsep(&command, " \n");
+            printf("Arquivo a ser recebido: ->%s<- \n", word);
+
+            //Envia o nome do arquivo
+            datalen = strlen(word);
+            tmp = htonl(datalen);
+            n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
+            if (n < 0)
+                printf("Erro ao escrever no socket");
+            n = SSL_write(ssl, word, datalen);
+            if (n < 0)
+                printf("Erro ao escrever no socket");
+
+            char file_name_with_extension[50];
+
+            //Aguardo confirmação
+            int buflen;
+            n = SSL_read(ssl, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            buflen = ntohl(buflen);
+            n = SSL_read(ssl, file_name_with_extension, buflen);
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            file_name_with_extension[n] = '\0';
+
+            get_file(word);
+        }
+        else if (strcmp(word, "get_sync_dir") == 0)
+        {
+            printf("A partir de agora seus arquivos serão sincronizados...");
+            sync_client();
+        }
+        else if (strcmp(word, "exit") == 0)
+        {
+            printf("Saindo...");
+            char exit_command[10];
+            strcpy(exit_command, "exit");
+
+            //Envia o comando para avisar que está deslogando
+            int datalen = strlen(exit_command);
+            tmp = htonl(datalen);
+            n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
+            if (n < 0)
+            {
+                printf("Erro ao escrever no socket");
+                switch_primary(n);
+            }
+            n = SSL_write(ssl, exit_command, datalen);
+            if (n < 0)
+            {
+                printf("Erro ao escrever no socket");
+                switch_primary(n);
+            }
+
+            //Envia nome do usuário que vai deslogar
+            datalen = strlen(username);
+            tmp = htonl(datalen);
+            n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
+            if (n < 0)
+                printf("Erro ao escrever no socket");
+            n = SSL_write(ssl, username, datalen);
+            if (n < 0)
+                printf("Erro ao escrever no socket");
+
+            close_connection();
+        }
+        else if (strcmp(word, "upload") == 0)
+        {
+
+            word = strsep(&command, " \n");
+
+            char file[50];
+            char file_name[50];
+            char file_extension[50];
+
+            printf("Arquivo a ser enviado: ->%s<- \n", word);
+            strcpy(file, word);
+
+            //Separa extensão do nome do arquivo
+            int file_name_i = 0;
+            // preenche nome do arquivo
+            while (file[file_name_i] != '.')
+            {
+                file_name[file_name_i] = file[file_name_i];
+                file_name_i++;
+            }
+            file_name[file_name_i] = '\0';
+
+            printf("Nome do arquivo: %s\n", file_name);
+            file_name_i++;
+            //preenche extensao do arquivo
+            int file_extension_i = 0;
+            while (file[file_name_i] != '\0')
+            {
+                file_extension[file_extension_i] = file[file_name_i];
+                file_extension_i++;
+                file_name_i++;
+            }
+            file_extension[file_extension_i] = '\0';
+            printf("Extensão do arquivo: %s\n", file_extension);
+
+            //Envia arquivo especificado
+            FILE *fp;
+            printf("Verificando se arquivo existe: ->%s<- \n", word);
+
+            if ((fp = fopen(word, "r")) == NULL)
+            {
+                printf("Arquivo não encontrado\n");
+            }
+            else
+            {
+                char upload_command[20];
+                strcpy(upload_command, "upload");
+
+                //Envia o comando para iniciar o upload
+                int datalen = strlen(upload_command);
+                int tmp = htonl(datalen);
+                int n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
+                if (n < 0)
+                {
+                    printf("Erro ao escrever no socket");
+                    switch_primary(n);
+                }
+                n = SSL_write(ssl, upload_command, datalen);
+                if (n < 0)
+                {
+                    printf("Erro ao escrever no socket");
+                    switch_primary(n);
+                }
+
+                printf("\nArquivo encontrado\n");
+
+                //Envia last modified do arquivo
+                struct stat attr;
+                stat(word, &attr);
+                time_t last_modified = attr.st_mtime;
+                int lm = htonl(last_modified);
+
+                datalen = sizeof(lm);
+                tmp = htonl(datalen);
+                n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
+                if (n < 0)
+                    printf("Erro ao escrever no socket");
+                n = SSL_write(ssl, &lm, datalen);
+                if (n < 0)
+                    printf("Erro ao escrever no socket");
+
+                send_file(file_name, file_extension, fp);
+            }
+        }
+
+        else if (strcmp(word, "list") == 0)
+        {
+            char list_command[20];
+            strcpy(list_command, "list");
+
+            //Envia comando
+            int datalen = strlen(list_command);
+            int tmp = htonl(datalen);
+            int n = SSL_write(ssl, (char *)&tmp, sizeof(tmp));
+            if (n < 0)
+            {
+                printf("Erro ao escrever no socket");
+                switch_primary(n);
+            }
+            n = SSL_write(ssl, list_command, datalen);
+            if (n < 0)
+            {
+                printf("Erro ao escrever no socket");
+                switch_primary(n);
+            }
+
+            char str[1000];
+
+            //Aguarda a string contendo a lista
+            int buflen;
+            n = SSL_read(ssl, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            buflen = ntohl(buflen);
+            n = SSL_read(ssl, str, buflen);
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            str[n] = '\0';
+            puts(str);
+        }
+
+        else
+        {
+            printf("Comando invalido...\n");
+        }
+    }
+}
 
 int main(int argc, char *argv[])
 {
+    signal(SIGPIPE, switch_primary);
 
     //Configurações para SSL
     OpenSSL_add_ssl_algorithms();
@@ -45,10 +347,24 @@ int main(int argc, char *argv[])
         abort();
     }
 
-    int port;
-    char *userId = argv[1];
-    char *ip = argv[2];
+    userId = argv[1];
+
+    ip = argv[2];
     char *portArg = argv[3];
+    port = atoi(portArg);
+
+    backup_ip_1 = argv[4];
+    char *arg_port_backup_1 = argv[5];
+    backup_port_1 = atoi(arg_port_backup_1);
+
+    backup_ip_2 = argv[6];
+    char *arg_port_backup_2 = argv[7];
+    backup_port_2 = atoi(arg_port_backup_2);
+
+    backup_ip_3 = argv[8];
+    char *arg_port_backup_3 = argv[9];
+    backup_port_3 = atoi(arg_port_backup_3);
+
     struct sockaddr_in server;
     char message[1000], server_reply[2000];
     int n;
@@ -56,13 +372,20 @@ int main(int argc, char *argv[])
     char buf_send[1000];
     char *filename;
 
-    port = atoi(portArg);
-
     if (connect_server(ip, port) == 1)
     {
-        printf("Erro ao conectar com o servidor");
-        fflush(stdout);
-        exit(1);
+        printf("Erro ao conectar com o servidor. Tentando backup...");
+        if (connect_server(backup_ip_1, backup_port_1) == 1)
+        {
+            if (connect_server(backup_ip_2, backup_port_2) == 1)
+            {
+                if (connect_server(backup_ip_3, backup_port_3) == 1)
+                {
+                    fflush(stdout);
+                    exit(1);
+                }
+            }
+        }
     }
 
     //Envia qual usuario que logou
@@ -322,20 +645,25 @@ int main(int argc, char *argv[])
 int connect_server(char *host, int port)
 {
     struct sockaddr_in server;
+    puts("Criando socket...");
+    fflush(stdout);
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock == -1)
     {
         printf("Erro ao criar socket");
+        fflush(stdout);
         return 1;
     }
 
     //Seta o socket para SSL
+    puts("Conectando ao socket...");
+    fflush(stdout);
 
     server.sin_addr.s_addr = inet_addr(host);
     server.sin_family = AF_INET;
     server.sin_port = htons(port);
     //Conecta ao servidor
-   
+
     if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0)
     {
         return 1;
