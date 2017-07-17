@@ -30,10 +30,298 @@ node_t *create_client_list(node_t *head);
 node_t *head;
 
 //Usado para proteger o acesso a estrutura de dados compartilhada entre as threads
-sem_t updating, deleting, creating, logout;
+sem_t updating, deleting, creating, logout, updating_replica;
+
+int backup_port_1, backup_port_2, backup_port_3;
+int port;
+char *backup_ip_1, *backup_ip_2, *backup_ip_3;
+
+void receive_backup_files(int sock)
+{
+    char user_folder[50];
+    int buflen;
+
+    while (1)
+    {
+        //Recebe nome da pasta
+        int n = read(sock, (char *)&buflen, sizeof(buflen));
+        if (n < 0)
+            printf("Erro ao ler do socket");
+        buflen = ntohl(buflen);
+        n = read(sock, user_folder, buflen);
+        if (n < 0)
+            printf("Erro ao ler do socket");
+        user_folder[n] = '\0';
+        printf("Tamanho: %d Mensagem: %s\n", buflen, user_folder);
+        printf("Verificando existência da pasta %s\n", user_folder);
+        if (strcmp(user_folder, "stop") == 0)
+        {
+            break;
+        }
+        //Cria a pasta caso não exista
+        struct stat st = {0};
+        if (stat(user_folder, &st) == -1)
+        {
+            printf("Não existe! Criando pasta...\n");
+            mkdir(user_folder, 0777);
+        }
+
+        char file_buffer[100000];
+        FILE *fp;
+
+        char file[MAXNAME];
+        //Aguardo nome do arquivo ja com o path
+        n = read(sock, (char *)&buflen, sizeof(buflen));
+        if (n < 0)
+            printf("Erro ao ler do socket");
+        buflen = ntohl(buflen);
+        n = read(sock, file, buflen);
+        if (n < 0)
+            printf("Erro ao ler do socket");
+        file[n] = '\0';
+        printf("Tamanho: %d Mensagem: %s\n", buflen, file);
+
+        printf("Recebendo arquivo em: %s\n", file);
+
+        //Recebe arquivo
+        n = read(sock, (char *)&buflen, sizeof(buflen));
+        if (n < 0)
+            printf("Erro ao ler do socket");
+        buflen = ntohl(buflen);
+        n = read(sock, file_buffer, buflen);
+        if (n < 0)
+            printf("Erro ao ler do socket");
+        file_buffer[n] = '\0';
+        printf("Tamanho: %d Mensagem: %s\n", buflen, file_buffer);
+
+        printf("\n\n Recebendo arquivo... \n\n");
+        fflush(stdout);
+        unlink(file);
+        fp = fopen(file, "w");
+        fputs(file_buffer, fp);
+        fclose(fp);
+
+        memset(file_buffer, 0, sizeof(file_buffer));
+
+        printf("\n\n Arquivo recebido \n\n");
+        char response[50];
+        strcpy(response, "done");
+        //Envia confirmacao de recebimento
+        int datalen = strlen(response);
+        int tmp = htonl(datalen);
+        n = write(sock, (char *)&tmp, sizeof(tmp));
+        if (n < 0)
+            printf("Erro ao escrever no socket");
+        n = write(sock, response, datalen);
+        if (n < 0)
+            printf("Erro ao escrever no socket");
+    }
+    puts("Terminou de receber arquivos\n");
+}
+
+void receive_backup_structure(int sock)
+{
+
+    while (1)
+    {
+        int buflen;
+
+        client_t *cli = malloc(sizeof(client_t));
+        char command[50];
+        //Recebe nome do cliente ou informação que já recebeu todos eles
+        int n = read(sock, (char *)&buflen, sizeof(buflen));
+        if (n < 0)
+            printf("Erro ao ler do socket");
+        buflen = ntohl(buflen);
+        n = read(sock, command, buflen);
+        if (n < 0)
+            printf("Erro ao ler do socket");
+        command[n] = '\0';
+        printf("Tamanho: %d Mensagem: %s\n", buflen, command);
+        //Caso receba stop, significa que já recebeu toda a estrutura
+        if (strcmp(command, "stop") == 0)
+        {
+            break;
+        }
+        strcpy(cli->userid, command);
+
+        int devices[2];
+        //Recebe devices
+        n = read(sock, (char *)&buflen, sizeof(buflen));
+        if (n < 0)
+            printf("Erro ao ler do socket");
+        buflen = ntohl(buflen);
+        printf("Tamanho da estrutura do cliente: %d\n", buflen);
+        n = read(sock, cli->devices, buflen);
+        if (n < 0)
+            printf("Erro ao ler do socket");
+
+        //Recebe arquivos
+        int file_i = 0;
+        while (1)
+        {
+
+            char file_name[50];
+            //Recebe nome do arquivo ou informação que já recebeu todos eles
+            int n = read(sock, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            buflen = ntohl(buflen);
+            n = read(sock, file_name, buflen);
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            file_name[n] = '\0';
+            printf("Tamanho: %d Mensagem: %s\n", buflen, file_name);
+            //Caso receba stop, significa que já recebeu toda a estrutura
+            if (strcmp(file_name, "stop") == 0)
+            {
+                break;
+            }
+            strcpy(cli->f_info[file_i].name, file_name);
+
+            char file_extension[50];
+
+            //Recebe extensao
+            n = read(sock, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            buflen = ntohl(buflen);
+            n = read(sock, file_extension, buflen);
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            file_extension[n] = '\0';
+
+            strcpy(cli->f_info[file_i].extension, file_name);
+
+            time_t lm;
+            //Recebe last modified
+            n = read(sock, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            buflen = ntohl(buflen);
+            n = read(sock, &lm, buflen);
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            lm = ntohl(lm);
+            printf("Tamanho: %d Mensagem: %s\n", buflen, ctime(&lm));
+            cli->f_info[file_i].last_modified = lm;
+
+            //Recebe is deleted
+            int is_deleted;
+            n = read(sock, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            buflen = ntohl(buflen);
+            n = read(sock, &is_deleted, buflen);
+            if (n < 0)
+                printf("Erro ao ler do socket");
+
+            cli->f_info[file_i].is_deleted = is_deleted;
+
+            time_t dd;
+
+            //Recebe deleted_date
+            n = read(sock, (char *)&buflen, sizeof(buflen));
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            buflen = ntohl(buflen);
+            n = read(sock, &dd, buflen);
+            if (n < 0)
+                printf("Erro ao ler do socket");
+            dd = ntohl(dd);
+            printf("Tamanho: %d Mensagem: %s\n", buflen, ctime(&dd));
+            cli->f_info[file_i].deleted_date = dd;
+
+            file_i++;
+        }
+
+        //Procura se ja existe o cliente para substituir a estrutura, senao cria o novo cliente
+        printf("Pasta do usuário >>%s<<\n", command);
+        node_t *cursor2 = head;
+        int has_client = 0;
+        while (cursor2 != NULL)
+        {
+            printf("Nome do cliente atual >>%s<<\n", cursor2->cli->userid);
+            printf("userfolder: %s\n", command);
+
+            if (strcmp(cursor2->cli->userid, command) == 0)
+            {
+
+                printf("Cliente ja existente no backup... Atualizando: %s\n", command);
+                cursor2->cli = cli;
+                has_client = 1;
+                puts("Atualizado!");
+                break;
+            }
+            cursor2 = cursor2->next;
+        }
+
+        printf("Alocando backup do cliente...\n");
+
+        if (has_client == 0)
+        {
+            printf("Adicionando a lista o cliente %s...\n", cli->userid);
+            head = append(head, cli);
+            printf("Adicionado!...\n");
+        }
+    }
+}
+
+void *listen_to_updates()
+{
+    int socket_desc, primary_socket, c;
+    struct sockaddr_in server, client;
+
+    socket_desc = socket(AF_INET, SOCK_STREAM, 0);
+    if (socket_desc == -1)
+    {
+        printf("Falha ao criar socket");
+    }
+
+    server.sin_family = AF_INET;
+    server.sin_addr.s_addr = INADDR_ANY;
+    server.sin_port = htons(port + 1); //Escuta atualizações sempre na porta acima da de comunicação com o cliente
+
+    if (bind(socket_desc, (struct sockaddr *)&server, sizeof(server)) < 0)
+    {
+        printf("Falha ao fazer o bind");
+    }
+    //Listen
+    while (1)
+    {
+        listen(socket_desc, 3);
+
+        //Aguarda conexões
+        puts("Aguarda primário");
+        c = sizeof(struct sockaddr_in);
+
+        primary_socket = accept(socket_desc, (struct sockaddr *)&client, (socklen_t *)&c);
+
+        puts("Conectou com primário, recebendo atualização");
+
+        receive_backup_files(primary_socket);
+        receive_backup_structure(primary_socket);
+
+        puts("Atualizado!");
+    }
+}
 
 int main(int argc, char *argv[])
 {
+    char *portArg = argv[1];
+    port = atoi(portArg);
+
+    backup_ip_1 = argv[2];
+    char *arg_port_backup_1 = argv[3];
+    backup_port_1 = atoi(arg_port_backup_1);
+
+    backup_ip_2 = argv[4];
+    char *arg_port_backup_2 = argv[5];
+    backup_port_2 = atoi(arg_port_backup_2);
+
+    backup_ip_3 = argv[6];
+    char *arg_port_backup_3 = argv[7];
+    backup_port_3 = atoi(arg_port_backup_3);
 
     SSL_METHOD *method;
     SSL_CTX *ctx;
@@ -57,11 +345,20 @@ int main(int argc, char *argv[])
         exit(4);
     }
 
+    pthread_t backup_update_thread;
+    //Cria thread que escuta atualizações de um primario, caso esse servidor for um de backup
+    if (pthread_create(&backup_update_thread, NULL, listen_to_updates, NULL) < 0)
+    {
+        printf("Falha ao criar a thread");
+        return 1;
+    }
+
     //Inicializa semáforos como 1, fazendo eles funcionarem como mutex para garantir exclusão mútua
     sem_init(&updating, 0, 1);
     sem_init(&deleting, 0, 1);
     sem_init(&creating, 0, 1);
     sem_init(&logout, 0, 1);
+    sem_init(&updating_replica, 0, 1);
 
     head = NULL;
     head = create_client_list(head);
@@ -78,7 +375,7 @@ int main(int argc, char *argv[])
 
     server.sin_family = AF_INET;
     server.sin_addr.s_addr = INADDR_ANY;
-    server.sin_port = htons(8888);
+    server.sin_port = htons(port);
 
     if (bind(socket_desc, (struct sockaddr *)&server, sizeof(server)) < 0)
     {
@@ -102,6 +399,7 @@ int main(int argc, char *argv[])
         ssl_new = SSL_new(ctx);
         SSL_set_fd(ssl_new, client_sock);
         SSL_accept (ssl_new);
+
         if (pthread_create(&connection_client_thread, NULL, connection_handler, ssl_new) < 0)
         {
             printf("Falha ao criar a thread");
@@ -118,6 +416,315 @@ int main(int argc, char *argv[])
     }
 
     return 0;
+}
+
+void send_files_to_replica(int sock)
+{
+    DIR *d;
+    struct dirent *dir;
+    d = opendir(".");
+    if (d)
+    {
+        while ((dir = readdir(d)) != NULL)
+        {
+            if (dir->d_type == DT_DIR)
+            { // se eh um diretorio
+                if (dir->d_name[0] != '.')
+                { // se eh um diretorio valido
+                    char name[50];
+                    strcpy(name, dir->d_name);
+
+                    if (strcmp(name, "sync_dir"))
+                    { // se nao eh uma pasta pertencente ao usuario
+
+                        DIR *user_d;
+                        struct dirent *user_f;
+
+                        user_d = opendir(dir->d_name);
+                        if (user_d)
+                        {
+                            int f_i = 0;
+
+                            while ((user_f = readdir(user_d)) != NULL)
+                            {
+                                if (user_f->d_name[0] != '.')
+                                {
+                                    printf("\nVarrendo arquivos para enviar pro backup %s\n", user_f->d_name);
+
+                                    //Envia o nome da pasta
+                                    int datalen = strlen(dir->d_name);
+                                    int tmp = htonl(datalen);
+                                    int n = write(sock, (char *)&tmp, sizeof(tmp));
+                                    if (n < 0)
+                                        printf("Erro ao escrever no socket");
+                                    n = write(sock, dir->d_name, datalen);
+                                    if (n < 0)
+                                        printf("Erro ao escrever no socket");
+
+                                    char file[50];
+                                    char file_name[50];
+                                    char file_extension[50];
+
+                                    printf("Arquivo a ser enviado: pasta: %s ->%s<- \n", dir->d_name, user_f->d_name);
+                                    strcpy(file, user_f->d_name);
+                                    char path[50];
+                                    snprintf(path, sizeof(path), "%s/%s", dir->d_name, user_f->d_name);
+                                    puts(path);
+                                    //Envia arquivo especificado
+                                    FILE *fp;
+                                    if ((fp = fopen(path, "r")) == NULL)
+                                    {
+                                        printf("Arquivo não encontrado\n");
+                                    }
+                                    else
+                                    {
+                                        //Envia o nome do arquivo
+                                        int datalen = strlen(path);
+                                        int tmp = htonl(datalen);
+                                        int n = write(sock, (char *)&tmp, sizeof(tmp));
+                                        if (n < 0)
+                                            printf("Erro ao escrever no socket");
+                                        n = write(sock, path, datalen);
+                                        if (n < 0)
+                                            printf("Erro ao escrever no socket");
+
+                                        printf("Enviando arquivo...\n");
+
+                                        long lSize;
+                                        char *file_buffer;
+                                        fseek(fp, 0L, SEEK_END);
+                                        lSize = ftell(fp);
+                                        rewind(fp);
+                                        /* Aloca memória para todo o conteúdo */
+                                        file_buffer = calloc(1, lSize + 1);
+                                        if (!file_buffer)
+                                            fclose(fp), fputs("Erro ao alocar", stderr), exit(1);
+
+                                        /* Copia para buffer */
+                                        if (1 != fread(file_buffer, lSize, 1, fp))
+                                            fclose(fp), free(file_buffer), fputs("Erro na leitura", stderr), exit(1);
+
+                                        printf("Enviando arquivo para o servidor....\n");
+                                        fclose(fp);
+
+                                        //Enviando de fato arquivo
+                                        datalen = strlen(file_buffer);
+                                        tmp = htonl(datalen);
+                                        n = write(sock, (char *)&tmp, sizeof(tmp));
+                                        if (n < 0)
+                                            printf("Erro ao escrever no socket");
+                                        n = write(sock, file_buffer, datalen);
+                                        if (n < 0)
+                                            printf("Erro ao escrever no socket");
+
+                                        free(file_buffer);
+
+                                        //Aguarda resposta de recebimento completo do arquivo no servidor
+                                        char response[20];
+                                        int buflen;
+                                        n = read(sock, (char *)&buflen, sizeof(buflen));
+                                        if (n < 0)
+                                            printf("Erro ao ler do socket");
+                                        buflen = ntohl(buflen);
+                                        n = read(sock, response, buflen);
+                                        if (n < 0)
+                                            printf("Erro ao ler do socket");
+                                        response[n] = '\0';
+                                        if (strcmp(response, "done"))
+                                        {
+                                            printf("Arquivo recebido com sucesso!\n");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        closedir(user_d);
+                    }
+                }
+            }
+        }
+        closedir(d);
+        char stop[50];
+        strcpy(stop, "stop");
+        //Envia informacao de que parou de enviar os arquivos
+        int datalen = strlen(stop);
+        int tmp = htonl(datalen);
+        int n = write(sock, (char *)&tmp, sizeof(tmp));
+        if (n < 0)
+            printf("Erro ao escrever no socket");
+        n = write(sock, stop, datalen);
+        if (n < 0)
+            printf("Erro ao escrever no socket");
+    }
+}
+
+void send_structure_to_replica(int sock)
+{
+
+    //Agora atualiza estrutura de dados
+    node_t *cursor = head;
+    while (cursor != NULL)
+    {
+        char response[50];
+        strcpy(response, cursor->cli->userid);
+        //Envia nome do cliente
+        int datalen = strlen(response);
+        int tmp = htonl(datalen);
+        int n = write(sock, (char *)&tmp, sizeof(tmp));
+        if (n < 0)
+            printf("Erro ao escrever no socket");
+        n = write(sock, response, datalen);
+        if (n < 0)
+            printf("Erro ao escrever no socket");
+
+        //Envia devices
+        n = write(sock, (char *)&tmp, sizeof(tmp));
+        if (n < 0)
+            printf("Erro ao escrever no socket");
+        n = write(sock, cursor->cli->devices, datalen);
+        if (n < 0)
+            printf("Erro ao escrever no socket");
+
+        //Envia arquivos
+        int file_i = 0;
+        while (strcmp(cursor->cli->f_info[file_i].name, "") != 0)
+        {
+            printf("Enviando estrutura. Arquivo atual: %s", cursor->cli->f_info[file_i].name);
+            //Envia nome do arquivo
+            n = write(sock, (char *)&tmp, sizeof(tmp));
+            if (n < 0)
+                printf("Erro ao escrever no socket");
+            n = write(sock, cursor->cli->f_info[file_i].name, datalen);
+            if (n < 0)
+                printf("Erro ao escrever no socket");
+
+            //Envia extensao do arquivo
+            n = write(sock, (char *)&tmp, sizeof(tmp));
+            if (n < 0)
+                printf("Erro ao escrever no socket");
+            n = write(sock, cursor->cli->f_info[file_i].extension, datalen);
+            if (n < 0)
+                printf("Erro ao escrever no socket");
+
+            //Envia last modified
+            int lm = htonl(cursor->cli->f_info[file_i].last_modified);
+            datalen = sizeof(lm);
+            tmp = htonl(datalen);
+            n = write(sock, (char *)&tmp, sizeof(tmp));
+            if (n < 0)
+                printf("Erro ao escrever no socket");
+            n = write(sock, &lm, datalen);
+            if (n < 0)
+                printf("Erro ao escrever no socket");
+
+            //Envia is deleted
+            n = write(sock, (char *)&tmp, sizeof(tmp));
+            if (n < 0)
+                printf("Erro ao escrever no socket");
+            n = write(sock, &cursor->cli->f_info[file_i].is_deleted, datalen);
+            if (n < 0)
+                printf("Erro ao escrever no socket");
+
+            //Envia deleted_date
+            int dd = htonl(cursor->cli->f_info[file_i].deleted_date);
+            datalen = sizeof(dd);
+            tmp = htonl(datalen);
+            n = write(sock, (char *)&tmp, sizeof(tmp));
+            if (n < 0)
+                printf("Erro ao escrever no socket");
+            n = write(sock, &dd, datalen);
+            if (n < 0)
+                printf("Erro ao escrever no socket");
+
+            file_i++;
+        }
+        char stop[50];
+        strcpy(stop, "stop");
+        //Envia informacao de que parou de os clientes
+        datalen = strlen(stop);
+        tmp = htonl(datalen);
+        n = write(sock, (char *)&tmp, sizeof(tmp));
+        if (n < 0)
+            printf("Erro ao escrever no socket");
+        n = write(sock, stop, datalen);
+        if (n < 0)
+            printf("Erro ao escrever no socket");
+
+        cursor = cursor->next;
+    }
+
+    char stop[50];
+    strcpy(stop, "stop");
+    //Envia informacao de que parou de os clientes
+    int datalen = strlen(stop);
+    int tmp = htonl(datalen);
+    int n = write(sock, (char *)&tmp, sizeof(tmp));
+    if (n < 0)
+        printf("Erro ao escrever no socket");
+    n = write(sock, stop, datalen);
+    if (n < 0)
+        printf("Erro ao escrever no socket");
+}
+
+void updateReplicas()
+{
+    sem_wait(&updating_replica);
+    struct sockaddr_in server;
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == -1)
+    {
+        printf("Erro ao criar socket");
+    }
+
+    //Seta o socket para SSL
+
+    server.sin_addr.s_addr = inet_addr(backup_ip_1);
+    server.sin_family = AF_INET;
+    server.sin_port = htons(backup_port_1);
+    //Conecta ao servidor
+    int fail_to_connect = 0;
+    if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0)
+    {
+        printf("Falha ao conectar com backup 1... Tentando próximo...\n");
+
+        //Conecta ao servidor
+        fail_to_connect = 1;
+    }
+    if (fail_to_connect == 0)
+    {
+        puts("Conectado com backup... Enviando backup 1...\n");
+        send_files_to_replica(sock);
+        send_structure_to_replica(sock);
+    }
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == -1)
+    {
+        printf("Erro ao criar socket");
+    }
+    fail_to_connect = 0;
+    server.sin_addr.s_addr = inet_addr(backup_ip_2);
+    server.sin_family = AF_INET;
+    server.sin_port = htons(backup_port_2);
+    if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0)
+    {
+
+        printf("Falha ao conectar com backup 2... \n");
+        fail_to_connect = 1;
+    }
+    if (fail_to_connect == 0)
+    {
+        puts("Conectado com backup... Enviando backup 2...\n");
+        send_files_to_replica(sock);
+        send_structure_to_replica(sock);
+    }
+
+    sem_post(&updating_replica);
+}
+
+int write_in_replicas_and_respond(SSL *ssl, const void *buf, int num)
+{
+    updateReplicas();
+    return SSL_write(ssl, buf, num);
 }
 
 void create_user_folder_and_update_structure(char *user_folder, SSL *sock)
@@ -157,10 +764,10 @@ void create_user_folder_and_update_structure(char *user_folder, SSL *sock)
         strcpy(response, "auth");
         int datalen = strlen(response);
         int tmp = htonl(datalen);
-        int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+        int n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
         if (n < 0)
             printf("Erro ao escrever no socket");
-        n = SSL_write(sock, response, datalen);
+        n = write_in_replicas_and_respond(sock, response, datalen);
         if (n < 0)
             printf("Erro ao escrever no socket");
     }
@@ -183,10 +790,10 @@ void create_user_folder_and_update_structure(char *user_folder, SSL *sock)
                     strcpy(response, "un_auth");
                     int datalen = strlen(response);
                     int tmp = htonl(datalen);
-                    int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+                    int n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
                     if (n < 0)
                         printf("Erro ao escrever no socket");
-                    n = SSL_write(sock, response, datalen);
+                    n = write_in_replicas_and_respond(sock, response, datalen);
                     if (n < 0)
                         printf("Erro ao escrever no socket");
                 }
@@ -196,10 +803,10 @@ void create_user_folder_and_update_structure(char *user_folder, SSL *sock)
                     strcpy(response, "auth");
                     int datalen = strlen(response);
                     int tmp = htonl(datalen);
-                    int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+                    int n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
                     if (n < 0)
                         printf("Erro ao escrever no socket");
-                    n = SSL_write(sock, response, datalen);
+                    n = write_in_replicas_and_respond(sock, response, datalen);
                     if (n < 0)
                         printf("Erro ao escrever no socket");
 
@@ -226,10 +833,10 @@ void send_file(char *file, FILE *fp, SSL *sock)
     //Envia o nome do arquivo já com o path da pasta do servidor para facilitar. Ex. sync_dir_eduardo/arquivo.txt
     int datalen = strlen(file);
     int tmp = htonl(datalen);
-    int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+    int n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
     if (n < 0)
         printf("Erro ao escrever no socket\n");
-    n = SSL_write(sock, file, datalen);
+    n = write_in_replicas_and_respond(sock, file, datalen);
     if (n < 0)
         printf("Erro ao escrever no socket\n");
 
@@ -254,10 +861,10 @@ void send_file(char *file, FILE *fp, SSL *sock)
     //Enviando de fato arquivo
     datalen = strlen(file_buffer);
     tmp = htonl(datalen);
-    n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+    n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
     if (n < 0)
         printf("Erro ao escrever no socket");
-    n = SSL_write(sock, file_buffer, datalen);
+    n = write_in_replicas_and_respond(sock, file_buffer, datalen);
     if (n < 0)
         printf("Erro ao escrever no socket");
 
@@ -361,10 +968,10 @@ void receive_file(char *file, SSL *sock)
     //Envia confirmacao de recebimento
     int datalen = strlen(response);
     int tmp = htonl(datalen);
-    n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+    n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
     if (n < 0)
         printf("Erro ao escrever no socket");
-    n = SSL_write(sock, response, datalen);
+    n = write_in_replicas_and_respond(sock, response, datalen);
     if (n < 0)
         printf("Erro ao escrever no socket");
 }
@@ -388,10 +995,10 @@ delete_file(char *file_to_delete, char *user_folder, SSL *sock)
         strcpy(done, "done");
         int datalen = strlen(done);
         int tmp = htonl(datalen);
-        int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+        int n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
         if (n < 0)
             printf("Erro ao escrever no socket");
-        n = SSL_write(sock, done, datalen);
+        n = write_in_replicas_and_respond(sock, done, datalen);
         if (n < 0)
             printf("Erro ao escrever no socket");
 
@@ -445,10 +1052,10 @@ delete_file(char *file_to_delete, char *user_folder, SSL *sock)
         strcpy(done, "done");
         int datalen = strlen(done);
         int tmp = htonl(datalen);
-        int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+        int n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
         if (n < 0)
             printf("Erro ao escrever no socket");
-        n = SSL_write(sock, done, datalen);
+        n = write_in_replicas_and_respond(sock, done, datalen);
         if (n < 0)
             printf("Erro ao escrever no socket");
     }
@@ -498,10 +1105,10 @@ void sync_server_files(char *user_folder, SSL *sock)
                 //Envia nome do arquivo
                 int datalen = strlen(file_name);
                 int tmp = htonl(datalen);
-                int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+                int n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
                 if (n < 0)
                     printf("Erro ao escrever no socket");
-                n = SSL_write(sock, file_name, datalen);
+                n = write_in_replicas_and_respond(sock, file_name, datalen);
                 if (n < 0)
                     printf("Erro ao escrever no socket");
 
@@ -551,10 +1158,10 @@ void sync_server_files(char *user_folder, SSL *sock)
         strcpy(done, "server_done");
         int datalen = strlen(done);
         int tmp = htonl(datalen);
-        int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+        int n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
         if (n < 0)
             printf("Erro ao escrever no socket");
-        n = SSL_write(sock, done, datalen);
+        n = write_in_replicas_and_respond(sock, done, datalen);
         if (n < 0)
             printf("Erro ao escrever no socket");
     }
@@ -687,10 +1294,10 @@ void sync_client_local_files(char *user_folder, SSL *sock)
                             //Envia apenas o comando avisando o que deve ser feito
                             int datalen = strlen(sync_local_command_reponse);
                             int tmp = htonl(datalen);
-                            n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+                            n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
                             if (n < 0)
                                 printf("Erro ao escrever no socket");
-                            n = SSL_write(sock, sync_local_command_reponse, datalen);
+                            n = write_in_replicas_and_respond(sock, sync_local_command_reponse, datalen);
                             if (n < 0)
                                 printf("Erro ao escrever no socket");
                         }
@@ -710,10 +1317,10 @@ void sync_client_local_files(char *user_folder, SSL *sock)
                             //Envia apenas o comando avisando o que deve ser feito
                             int datalen = strlen(sync_local_command_reponse);
                             int tmp = htonl(datalen);
-                            n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+                            n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
                             if (n < 0)
                                 printf("Erro ao escrever no socket");
-                            n = SSL_write(sock, sync_local_command_reponse, datalen);
+                            n = write_in_replicas_and_respond(sock, sync_local_command_reponse, datalen);
                             if (n < 0)
                                 printf("Erro ao escrever no socket");
 
@@ -763,10 +1370,10 @@ void sync_client_local_files(char *user_folder, SSL *sock)
                         //Envia apenas o comando avisando o que deve ser feito
                         int datalen = strlen(sync_local_command_reponse);
                         int tmp = htonl(datalen);
-                        n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+                        n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
                         if (n < 0)
                             printf("Erro ao escrever no socket");
-                        n = SSL_write(sock, sync_local_command_reponse, datalen);
+                        n = write_in_replicas_and_respond(sock, sync_local_command_reponse, datalen);
                         if (n < 0)
                             printf("Erro ao escrever no socket");
 
@@ -802,10 +1409,10 @@ void sync_client_local_files(char *user_folder, SSL *sock)
                         //Envia apenas o comando avisando o que deve ser feito
                         int datalen = strlen(sync_local_command_reponse);
                         int tmp = htonl(datalen);
-                        n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+                        n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
                         if (n < 0)
                             printf("Erro ao escrever no socket");
-                        n = SSL_write(sock, sync_local_command_reponse, datalen);
+                        n = write_in_replicas_and_respond(sock, sync_local_command_reponse, datalen);
                         if (n < 0)
                             printf("Erro ao escrever no socket");
 
@@ -850,10 +1457,10 @@ void sync_client_local_files(char *user_folder, SSL *sock)
                         //Envia apenas o comando avisando o que deve ser feito
                         int datalen = strlen(sync_local_command_reponse);
                         int tmp = htonl(datalen);
-                        n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+                        n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
                         if (n < 0)
                             printf("Erro ao escrever no socket");
-                        n = SSL_write(sock, sync_local_command_reponse, datalen);
+                        n = write_in_replicas_and_respond(sock, sync_local_command_reponse, datalen);
                         if (n < 0)
                             printf("Erro ao escrever no socket");
                     }
@@ -870,10 +1477,10 @@ void sync_client_local_files(char *user_folder, SSL *sock)
                 //Envia apenas o comando avisando o que deve ser feito
                 int datalen = strlen(sync_local_command_reponse);
                 int tmp = htonl(datalen);
-                n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+                n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
                 if (n < 0)
                     printf("Erro ao escrever no socket");
-                n = SSL_write(sock, sync_local_command_reponse, datalen);
+                n = write_in_replicas_and_respond(sock, sync_local_command_reponse, datalen);
                 if (n < 0)
                     printf("Erro ao escrever no socket");
 
@@ -1180,10 +1787,10 @@ void list(char *user_folder, SSL *sock)
     //Envia a str para o cliente
     int datalen = strlen(str);
     int tmp = htonl(datalen);
-    int n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+    int n = write_in_replicas_and_respond(sock, (char *)&tmp, sizeof(tmp));
     if (n < 0)
         printf("Erro ao escrever no socket");
-    n = SSL_write(sock, str, datalen);
+    n = write_in_replicas_and_respond(sock, str, datalen);
     if (n < 0)
         printf("Erro ao escrever no socket");
 
