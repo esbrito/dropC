@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h> //for time()
 #include <openssl/crypto.h>
 #include <openssl/x509.h>
 #include <openssl/pem.h>
@@ -365,6 +366,7 @@ int main(int argc, char *argv[])
     int socket_desc, client_sock, c;
     struct sockaddr_in server, client;
 
+
     socket_desc = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_desc == -1)
     {
@@ -396,7 +398,8 @@ int main(int argc, char *argv[])
         SSL *ssl_new;
         ssl_new = SSL_new(ctx);
         SSL_set_fd(ssl_new, client_sock);
-        SSL_accept(ssl_new);
+        SSL_accept (ssl_new);
+
         if (pthread_create(&connection_client_thread, NULL, connection_handler, ssl_new) < 0)
         {
             printf("Falha ao criar a thread");
@@ -867,8 +870,54 @@ void send_file(char *file, FILE *fp, SSL *sock)
 
     free(file_buffer);
 
+    //Enviando o tempo do servidor
     char response[20];
+    char time_buff[64], tmbuf[64];
+    struct timeval now;
+    time_t nowtime;
+    struct tm *nowtm;
+
     int buflen;
+    bzero(response, 50);
+    n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
+    if (n < 0)
+        printf("Erro ao ler do socket");
+    buflen = ntohl(buflen);
+    n = SSL_read(sock, response, buflen);
+    if (n < 0)
+        printf("Erro ao ler do socket");
+
+    if (strcmp(response, "getTimeServer") == 0) {
+        printf("Request de tempo do servidor recebido\n");
+    } else {
+      printf("\n ERROR:  >%s<", response);
+    }
+
+    //Pega o horario atual
+    gettimeofday(&now, NULL);
+    nowtime = now.tv_sec;
+    nowtm = localtime(&nowtime);
+
+    //Converte para imprimir
+    strftime(tmbuf, sizeof tmbuf, "%Y-%m-%d %H:%M:%S",nowtm);
+    snprintf(time_buff, sizeof time_buff, "%s.%06ld",tmbuf, now.tv_usec);
+    printf("\nTIME SERVER: %s\n", time_buff);
+
+    // Altera o tempo do servidor manualmente
+    // time_buff[15]++;  //Minuto
+    // printf("\nTIME SERVER: %s\n", time_buff);
+
+    datalen = strlen(time_buff);
+    tmp = htonl(datalen);
+    n = SSL_write(sock, (char *)&tmp, sizeof(tmp));
+    if (n < 0)
+        printf("Erro ao escrever no socket");
+    n = SSL_write(sock, time_buff, datalen);
+    if (n < 0)
+        printf("Erro ao escrever no socket");
+
+    //Recebendo resposta
+    bzero(response,20);
     n = SSL_read(sock, (char *)&buflen, sizeof(buflen));
     if (n < 0)
         printf("Erro ao ler do socket");
