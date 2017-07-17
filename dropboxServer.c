@@ -280,7 +280,7 @@ void send_file(char *file, FILE *fp, SSL *sock)
     if (n < 0)
         printf("Erro ao ler do socket");
 
-    if (strcmp(response, "getTimeServer")) {
+    if (strcmp(response, "getTimeServer") == 0) {
         printf("Request de tempo do servidor recebido\n");
     } else {
       printf("\n ERROR:  >%s<", response);

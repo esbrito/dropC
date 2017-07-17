@@ -802,10 +802,10 @@ void get_file(char *file)
     //Pegando T1
     gettimeofday(&t1,NULL);
     //Calculando a diferenca dos tempos
-    const long int diff_sec = t1.tv_sec - t0.tv_sec;
+    const long int diff_sec = t1.tv_sec > t0.tv_sec ? t1.tv_sec - t0.tv_sec : t0.tv_sec - t1.tv_sec;
     //Pega o delta dos microsegundos
     const long int diff_usec = t1.tv_usec > t0.tv_usec ? t1.tv_usec - t0.tv_usec : t0.tv_usec - t1.tv_usec;
-    printf("T1 - t0 = sec %ld usec %d\n", diff_sec, diff_usec);
+    printf("t1 - t0 = sec %ld usec %d\n", diff_sec, diff_usec);
 
     //Separando tempo de microsegundos
     char *end;
@@ -813,11 +813,11 @@ void get_file(char *file)
     int usec_pos = (int)(dot - response);
 
     strncpy(time_buff, response, usec_pos);
+    strncpy(usec_buff, dot+1, 6);
     int server_usec = atoi(usec_buff);
     int rounding_sec = (server_usec + diff_usec)/1000000;
     const long  diff_time = (diff_sec + rounding_sec);
 
-    strncpy(usec_buff, dot+1, 6);
     strptime(time_buff, "%Y-%m-%d %H:%M:%S", &tm_server);
     tm_server.tm_sec += diff_time;
     time_t current_time = mktime(&tm_server);
